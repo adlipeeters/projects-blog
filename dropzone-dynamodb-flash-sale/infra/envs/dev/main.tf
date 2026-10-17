@@ -113,6 +113,57 @@ module "register_customer" {
   policies        = { commerce = data.aws_iam_policy_document.register_customer.json }
 }
 
+# AP7. The transaction writes the idempotency item, the stock buckets, the order and its lines, and
+# reads the catalog to re-price. TransactWriteItems has no IAM action of its own: it needs the
+# permissions of each write it performs.
+data "aws_iam_policy_document" "checkout" {
+  statement {
+    sid    = "WriteOrdersAndStock"
+    effect = "Allow"
+
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:GetItem",
+      "dynamodb:Query",
+    ]
+
+    resources = [module.tables.commerce_table_arn]
+  }
+
+  statement {
+    sid    = "ReadCatalogForPricing"
+    effect = "Allow"
+
+    # Read-only on the catalog: checkout re-prices from it and must never write to it.
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:BatchGetItem",
+    ]
+
+    resources = [module.tables.catalog_table_arn]
+  }
+}
+
+module "checkout" {
+  source = "../../modules/lambda-fn"
+
+  name        = "checkout"
+  name_prefix = local.name_prefix
+  description = "AP7: place an order in one transaction, with idempotency."
+  dist_dir    = "${local.dist_handlers}/checkout"
+
+  stage           = var.env
+  service_version = var.service_version
+
+  environment = {
+    COMMERCE_TABLE = module.tables.commerce_table_name
+    CATALOG_TABLE  = module.tables.catalog_table_name
+  }
+
+  policies = { checkout = data.aws_iam_policy_document.checkout.json }
+}
+
 # ---------------------------------------------------------------------------
 # Routes (spec section 7)
 # ---------------------------------------------------------------------------
@@ -138,6 +189,10 @@ module "api" {
     "POST /customers" = {
       function_name = module.register_customer.function_name
       invoke_arn    = module.register_customer.invoke_arn
+    }
+    "POST /checkout" = {
+      function_name = module.checkout.function_name
+      invoke_arn    = module.checkout.invoke_arn
     }
   }
 

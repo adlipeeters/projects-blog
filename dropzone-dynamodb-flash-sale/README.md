@@ -47,6 +47,8 @@ pnpm test:integration   # DynamoDB Local in Testcontainers, needs Docker
 pnpm build              # esbuild bundle per handler
 pnpm deploy             # build, then terraform apply
 pnpm seed               # 200 products plus one drop, into CATALOG_TABLE
+pnpm seed-stock         # stock for one sku, split across its buckets
+pnpm stock-report       # a sku's buckets and their sum
 pnpm reset-catalog      # clear seeded catalog items (between load runs)
 pnpm tf:plan            # terraform plan in infra/envs/dev
 ```

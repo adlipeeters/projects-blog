@@ -137,6 +137,18 @@ export const variantKey = (productId: string, sku: string): ItemKey => ({
 /** AP1: the prefix that selects variants only. */
 export const variantSkPrefix = (): string => 'VARIANT#';
 
+/**
+ * Sku pointer: `SKU#<sku>` / `SKU`
+ *
+ * Its own item whose partition key is the sku itself, so checkout can resolve a sku to a product
+ * with a key lookup instead of an index. Same shape of trick as the email marker in AP5: when
+ * something has to be addressable by a non-key attribute, make a second item whose key it is.
+ */
+export const skuPointerKey = (sku: string): ItemKey => ({
+  PK: `SKU#${sku}`,
+  SK: 'SKU',
+});
+
 const PRODUCT_PREFIX = 'PRODUCT#';
 
 /**
@@ -242,6 +254,22 @@ export const orderSkPrefix = (): string => 'ORDER#';
 export const orderStatusLsiSk = (status: string, orderId: string): string =>
   `STATUS#${status}#${orderId}`;
 
+/**
+ * AP9: the LSI attribute an order header always carries.
+ *
+ * Always, not conditionally: the LSI is defined on every item in the partition, and a missing sort
+ * key would simply drop the order out of the status view.
+ */
+export const orderStatusLsiAttributes = (
+  status: string,
+  orderId: string,
+): { readonly LSI1SK: string } => ({
+  LSI1SK: orderStatusLsiSk(status, orderId),
+});
+
+/** The LSI's sort key attribute name, for update expressions. */
+export const STATUS_LSI_ATTRIBUTE = 'LSI1SK';
+
 /** AP9: `begins_with(LSI1SK, STATUS#<status>#)`, read strongly consistent. */
 export const orderStatusLsiPrefix = (status: string): string => `STATUS#${status}#`;
 
@@ -262,6 +290,20 @@ export const orderLinePartition = (orderId: string): string => `ORDER#${orderId}
  */
 export const fulfillmentIndexPk = (orderId: string): string =>
   `FULFILL#${shardOf(orderId, SHARD_COUNTS.fulfillment)}`;
+
+/**
+ * AP12: the index attributes an order header carries while it still needs fulfilment.
+ *
+ * Absent once the order ships or is cancelled, which is what keeps the queue index small and makes
+ * "remove from the queue" a REMOVE of two attributes rather than a delete.
+ */
+export const fulfillmentIndexAttributes = (
+  orderId: string,
+  placedAt: string,
+): { readonly GSI1PK: string; readonly GSI1SK: string } => ({
+  GSI1PK: fulfillmentIndexPk(orderId),
+  GSI1SK: fulfillmentIndexSk(placedAt, orderId),
+});
 
 /** AP12: every shard, queried in parallel and merged by sort key. */
 export const fulfillmentIndexShards = (): readonly string[] =>

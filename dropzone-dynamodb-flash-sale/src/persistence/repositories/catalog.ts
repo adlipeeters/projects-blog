@@ -6,9 +6,9 @@
  * invocation but tests set it after importing this module.
  */
 
-import { QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { BatchGetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 
-import type { CategoryId, ProductId } from '../../domain/ids.js';
+import type { CategoryId, ProductId, Sku } from '../../domain/ids.js';
 import type { Product, ProductSummary, Variant } from '../../domain/product.js';
 import { catalogTable } from '../../shared/env.js';
 import { decodeCursor, encodeCursor, pageSize, type Page } from '../../shared/pagination.js';
@@ -20,16 +20,21 @@ import {
   categoryIndexPk,
   categoryPriceBounds,
   productPartition,
+  skuPointerKey,
   sortKeyOf,
+  variantKey,
   variantSkPrefix,
 } from '../keys.js';
 import {
   productFromItem,
   productSummaryFromIndexItem,
   productToItem,
+  skuPointerFromItem,
+  skuPointerToItem,
   variantFromItem,
   variantToItem,
 } from '../mappers/product.js';
+import type { SkuPointer } from '../mappers/product.js';
 
 export type ProductWithVariants = {
   readonly product: Product;
@@ -56,6 +61,10 @@ export function catalogRepository() {
       await batchWriteAll(table(), [
         { PutRequest: { Item: productToItem(product, now) } },
         ...variants.map((variant) => ({ PutRequest: { Item: variantToItem(variant) } })),
+        // One pointer per variant, so checkout can resolve a sku without an index.
+        ...variants.map((variant) => ({
+          PutRequest: { Item: skuPointerToItem(variant, product.categoryId) },
+        })),
       ]);
     },
 
@@ -97,6 +106,63 @@ export function catalogRepository() {
         product: productFromItem(meta),
         variants: items.filter(isVariant).map((item) => variantFromItem(item)),
       };
+    },
+
+    /**
+     * Resolves skus to the products they belong to (part of AP7, spec section 7 step 2).
+     *
+     * A key lookup on the pointer items, not an index query, so it is strongly consistent and
+     * costs one read unit per sku.
+     */
+    async resolveSkus(skus: readonly Sku[]): Promise<Map<Sku, SkuPointer>> {
+      const resolved = new Map<Sku, SkuPointer>();
+      if (skus.length === 0) {
+        return resolved;
+      }
+
+      const result = await documentClient().send(
+        new BatchGetCommand({
+          RequestItems: {
+            [table()]: {
+              Keys: [...new Set(skus)].map((sku) => skuPointerKey(sku)),
+              ConsistentRead: true,
+            },
+          },
+        }),
+      );
+
+      for (const item of result.Responses?.[table()] ?? []) {
+        const pointer = skuPointerFromItem(item);
+        resolved.set(pointer.sku, pointer);
+      }
+
+      return resolved;
+    },
+
+    /** The variants themselves: the price to snapshot and the bucket count to allocate from. */
+    async loadVariants(pointers: readonly SkuPointer[]): Promise<Map<Sku, Variant>> {
+      const variants = new Map<Sku, Variant>();
+      if (pointers.length === 0) {
+        return variants;
+      }
+
+      const result = await documentClient().send(
+        new BatchGetCommand({
+          RequestItems: {
+            [table()]: {
+              Keys: pointers.map((pointer) => variantKey(pointer.productId, pointer.sku)),
+              ConsistentRead: true,
+            },
+          },
+        }),
+      );
+
+      for (const item of result.Responses?.[table()] ?? []) {
+        const variant = variantFromItem(item);
+        variants.set(variant.sku, variant);
+      }
+
+      return variants;
     },
 
     /**

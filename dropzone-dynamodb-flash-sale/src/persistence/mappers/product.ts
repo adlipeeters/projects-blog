@@ -8,6 +8,8 @@
 
 import { z } from 'zod';
 
+import type { CategoryId, ProductId, Sku } from '../../domain/ids.js';
+
 import type { Product, ProductSummary, Variant } from '../../domain/product.js';
 import { categoryId, productId, sku } from '../../domain/ids.js';
 import { EUR, money } from '../../domain/money.js';
@@ -17,6 +19,7 @@ import {
   partitionKeyOf,
   productIdFromPartition,
   productKey,
+  skuPointerKey,
   variantKey,
 } from '../keys.js';
 import { buildDomain, parseItem } from './parse.js';
@@ -61,6 +64,46 @@ const categoryIndexItemSchema = z.object({
   fromPriceCents: z.number().int().nonnegative(),
   imageUrl: z.string(),
 });
+
+const skuPointerItemSchema = z.object({
+  entityType: z.literal(EntityType.SkuPointer),
+  schemaVersion: z.number().int().positive(),
+  sku: z.string(),
+  productId: z.string(),
+  categoryId: z.string(),
+});
+
+/** Where a sku lives, and which category it sells in. */
+export type SkuPointer = {
+  readonly sku: Sku;
+  readonly productId: ProductId;
+  readonly categoryId: CategoryId;
+};
+
+/**
+ * Written with the variant it points at.
+ *
+ * `categoryId` rides along because an order line records it (the sales aggregate in M4 is keyed by
+ * category), and reading it here saves checkout a read of the product META item.
+ */
+export const skuPointerToItem = (variant: Variant, category: string): Record<string, unknown> => ({
+  ...skuPointerKey(variant.sku),
+  entityType: EntityType.SkuPointer,
+  schemaVersion: SCHEMA_VERSION,
+  sku: variant.sku,
+  productId: variant.productId,
+  categoryId: category,
+});
+
+export function skuPointerFromItem(raw: unknown): SkuPointer {
+  const item = parseItem(skuPointerItemSchema, EntityType.SkuPointer, raw);
+
+  return buildDomain(EntityType.SkuPointer, raw, () => ({
+    sku: sku(item.sku),
+    productId: productId(item.productId),
+    categoryId: categoryId(item.categoryId),
+  }));
+}
 
 export function productToItem(product: Product, now: Date, version = 1): Record<string, unknown> {
   return {

@@ -7,6 +7,7 @@
 export const EntityType = {
   Product: 'Product',
   Variant: 'Variant',
+  SkuPointer: 'SkuPointer',
   Customer: 'Customer',
   EmailMarker: 'EmailMarker',
   Order: 'Order',

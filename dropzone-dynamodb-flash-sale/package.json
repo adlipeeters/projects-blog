@@ -21,6 +21,8 @@
     "deploy": "pnpm build && terraform -chdir=infra/envs/dev apply",
     "deploy:fn": "pnpm build && terraform -chdir=infra/envs/dev apply -target=module.health",
     "seed": "tsx scripts/seed.ts",
+    "seed-stock": "tsx scripts/seed-stock.ts",
+    "stock-report": "tsx scripts/stock-report.ts",
     "reset-catalog": "tsx scripts/reset-catalog.ts",
     "verify-stock": "tsx scripts/verify-stock.ts",
     "backfill": "tsx scripts/backfill-status-index.ts",
