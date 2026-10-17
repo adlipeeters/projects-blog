@@ -1,0 +1,22 @@
+node_modules
+dist
+coverage
+.vitest
+*.log
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# The build spec stays private until the articles are published (see docs/README.md).
+docs/SPEC.md
+
+# local config and secrets
+.env
+.env.*
+!.env.example
+
+.DS_Store

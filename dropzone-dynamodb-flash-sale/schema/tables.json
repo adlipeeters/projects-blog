@@ -1,0 +1,131 @@
+{
+  "env": "dev",
+  "namePrefix": "dropzone",
+  "regions": {
+    "primary": "eu-central-1",
+    "cartsReplica": "us-east-1"
+  },
+  "tables": {
+    "catalog": {
+      "nameSuffix": "catalog",
+      "billingMode": "PROVISIONED",
+      "hashKey": "PK",
+      "rangeKey": "SK",
+      "attributes": [
+        { "name": "PK", "type": "S" },
+        { "name": "SK", "type": "S" },
+        { "name": "GSI1PK", "type": "S" },
+        { "name": "GSI1SK", "type": "S" }
+      ],
+      "localSecondaryIndexes": [],
+      "globalSecondaryIndexes": [
+        {
+          "name": "category-price-index",
+          "hashKey": "GSI1PK",
+          "rangeKey": "GSI1SK",
+          "projectionType": "INCLUDE",
+          "nonKeyAttributes": ["name", "priceCents", "imageUrl"],
+          "sparse": true,
+          "shards": 1,
+          "accessPatterns": ["AP2"]
+        }
+      ],
+      "stream": { "enabled": false },
+      "ttlAttribute": null,
+      "replicas": [],
+      "pointInTimeRecovery": true,
+      "deletionProtection": true,
+      "contributorInsights": false,
+      "autoscaling": {
+        "read": { "min": 5, "max": 100 },
+        "write": { "min": 1, "max": 25 },
+        "targetUtilizationPercent": 70
+      }
+    },
+    "commerce": {
+      "nameSuffix": "commerce",
+      "billingMode": "PAY_PER_REQUEST",
+      "hashKey": "PK",
+      "rangeKey": "SK",
+      "attributes": [
+        { "name": "PK", "type": "S" },
+        { "name": "SK", "type": "S" },
+        { "name": "LSI1SK", "type": "S" },
+        { "name": "GSI1PK", "type": "S" },
+        { "name": "GSI1SK", "type": "S" },
+        { "name": "GSI2PK", "type": "S" },
+        { "name": "unitsSold", "type": "N" },
+        { "name": "GSI3PK", "type": "S" },
+        { "name": "GSI3SK", "type": "S" }
+      ],
+      "localSecondaryIndexes": [
+        {
+          "name": "customer-status-index",
+          "rangeKey": "LSI1SK",
+          "projectionType": "ALL",
+          "accessPatterns": ["AP9"]
+        }
+      ],
+      "globalSecondaryIndexes": [
+        {
+          "name": "fulfillment-index",
+          "hashKey": "GSI1PK",
+          "rangeKey": "GSI1SK",
+          "projectionType": "INCLUDE",
+          "nonKeyAttributes": ["customerId", "status", "totalCents"],
+          "sparse": true,
+          "shards": 10,
+          "accessPatterns": ["AP12"]
+        },
+        {
+          "name": "bestsellers-index",
+          "hashKey": "GSI2PK",
+          "rangeKey": "unitsSold",
+          "projectionType": "INCLUDE",
+          "nonKeyAttributes": ["sku", "productId"],
+          "sparse": true,
+          "shards": 4,
+          "accessPatterns": ["AP14"]
+        },
+        {
+          "name": "holds-index",
+          "hashKey": "GSI3PK",
+          "rangeKey": "GSI3SK",
+          "projectionType": "INCLUDE",
+          "nonKeyAttributes": ["customerId"],
+          "sparse": true,
+          "shards": 4,
+          "accessPatterns": ["AP15"]
+        }
+      ],
+      "stream": { "enabled": true, "viewType": "NEW_AND_OLD_IMAGES" },
+      "ttlAttribute": "ttl",
+      "replicas": [],
+      "pointInTimeRecovery": true,
+      "deletionProtection": true,
+      "contributorInsights": true,
+      "warmThroughput": { "readUnitsPerSecond": 12000, "writeUnitsPerSecond": 4000 },
+      "onDemandThroughput": { "maxReadRequestUnits": 20000, "maxWriteRequestUnits": 8000 },
+      "autoscaling": null
+    },
+    "carts": {
+      "nameSuffix": "carts",
+      "billingMode": "PAY_PER_REQUEST",
+      "hashKey": "PK",
+      "rangeKey": "SK",
+      "attributes": [
+        { "name": "PK", "type": "S" },
+        { "name": "SK", "type": "S" }
+      ],
+      "localSecondaryIndexes": [],
+      "globalSecondaryIndexes": [],
+      "stream": { "enabled": true, "viewType": "NEW_AND_OLD_IMAGES" },
+      "ttlAttribute": "ttl",
+      "replicas": [{ "regionName": "us-east-1" }],
+      "pointInTimeRecovery": true,
+      "deletionProtection": true,
+      "contributorInsights": false,
+      "autoscaling": null
+    }
+  }
+}
