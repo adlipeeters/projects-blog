@@ -37,9 +37,19 @@ resource "aws_dynamodb_table" "catalog" {
     for_each = local.catalog_gsi
 
     content {
-      name            = global_secondary_index.value.name
-      hash_key        = global_secondary_index.value.hashKey
-      range_key       = global_secondary_index.value.rangeKey
+      name = global_secondary_index.value.name
+
+      # key_schema rather than hash_key/range_key: the AWS provider deprecated those on index
+      # blocks in favour of this, which also matches the shape of the DynamoDB API itself.
+      dynamic "key_schema" {
+        for_each = local.index_key_schema[global_secondary_index.value.name]
+
+        content {
+          attribute_name = key_schema.value.attribute_name
+          key_type       = key_schema.value.key_type
+        }
+      }
+
       projection_type = global_secondary_index.value.projectionType
 
       # INCLUDE keeps the index small: a category listing needs a name, a price and an image, not

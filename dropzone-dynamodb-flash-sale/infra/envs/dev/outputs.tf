@@ -23,3 +23,11 @@ output "catalog_table_name" {
 output "catalog_index_names" {
   value = module.tables.catalog_index_names
 }
+
+output "commerce_table_name" {
+  value = module.tables.commerce_table_name
+}
+
+output "commerce_stream_arn" {
+  value = module.tables.commerce_stream_arn
+}

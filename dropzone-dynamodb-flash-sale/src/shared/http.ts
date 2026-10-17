@@ -17,7 +17,7 @@ import type {
 
 import { addLogContext, clearLogContext, logger } from './logger.js';
 import { metrics } from './metrics.js';
-import { isAppError, toErrorResponse } from './errors.js';
+import { ValidationError, isAppError, toErrorResponse } from './errors.js';
 
 export type HttpResult = {
   readonly status: number;
@@ -27,6 +27,28 @@ export type HttpResult = {
 export const ok = (body: unknown): HttpResult => ({ status: 200, body });
 export const created = (body: unknown): HttpResult => ({ status: 201, body });
 export const noContent = (): HttpResult => ({ status: 204 });
+
+/**
+ * The request body as unstructured JSON, for a Zod schema to validate.
+ *
+ * API Gateway base64-encodes the body when the client says the content is binary, so both shapes
+ * have to be handled or a perfectly good request fails on a parse error.
+ */
+export function jsonBody(event: APIGatewayProxyEventV2): unknown {
+  if (event.body === undefined || event.body.length === 0) {
+    throw new ValidationError('A JSON body is required');
+  }
+
+  const text = event.isBase64Encoded
+    ? Buffer.from(event.body, 'base64').toString('utf8')
+    : event.body;
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ValidationError('Body is not valid JSON');
+  }
+}
 
 export type RouteHandler = (event: APIGatewayProxyEventV2, context: Context) => Promise<HttpResult>;
 

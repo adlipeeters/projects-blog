@@ -104,7 +104,7 @@
       "pointInTimeRecovery": true,
       "deletionProtection": true,
       "contributorInsights": true,
-      "warmThroughput": { "readUnitsPerSecond": 12000, "writeUnitsPerSecond": 4000 },
+      "warmThroughput": null,
       "onDemandThroughput": { "maxReadRequestUnits": 20000, "maxWriteRequestUnits": 8000 },
       "autoscaling": null
     },

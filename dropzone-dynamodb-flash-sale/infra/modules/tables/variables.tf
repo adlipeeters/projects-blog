@@ -16,3 +16,16 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+locals {
+  # Every GSI in the schema file, as the provider's key_schema blocks: HASH first, then RANGE.
+  index_key_schema = {
+    for index in concat(
+      var.schema.tables.catalog.globalSecondaryIndexes,
+      var.schema.tables.commerce.globalSecondaryIndexes,
+      ) : index.name => concat(
+      [{ attribute_name = index.hashKey, key_type = "HASH" }],
+      try(index.rangeKey, null) == null ? [] : [{ attribute_name = index.rangeKey, key_type = "RANGE" }],
+    )
+  }
+}

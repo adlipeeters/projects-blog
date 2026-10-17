@@ -82,6 +82,37 @@ module "list_category" {
   policies        = { catalog-index = data.aws_iam_policy_document.list_category.json }
 }
 
+# AP5 and AP6: a transaction over two items in one table, plus the strongly consistent reads that
+# find a customer afterwards. TransactWriteItems has no IAM action of its own; it needs the
+# permissions of the writes it performs.
+data "aws_iam_policy_document" "register_customer" {
+  statement {
+    sid    = "WriteAndReadCustomerItems"
+    effect = "Allow"
+
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:GetItem",
+    ]
+
+    resources = [module.tables.commerce_table_arn]
+  }
+}
+
+module "register_customer" {
+  source = "../../modules/lambda-fn"
+
+  name        = "register-customer"
+  name_prefix = local.name_prefix
+  description = "AP5: register a customer with a unique email."
+  dist_dir    = "${local.dist_handlers}/register-customer"
+
+  stage           = var.env
+  service_version = var.service_version
+  environment     = { COMMERCE_TABLE = module.tables.commerce_table_name }
+  policies        = { commerce = data.aws_iam_policy_document.register_customer.json }
+}
+
 # ---------------------------------------------------------------------------
 # Routes (spec section 7)
 # ---------------------------------------------------------------------------
@@ -103,6 +134,10 @@ module "api" {
     "GET /categories/{categoryId}/products" = {
       function_name = module.list_category.function_name
       invoke_arn    = module.list_category.invoke_arn
+    }
+    "POST /customers" = {
+      function_name = module.register_customer.function_name
+      invoke_arn    = module.register_customer.invoke_arn
     }
   }
 
