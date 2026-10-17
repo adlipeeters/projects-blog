@@ -64,7 +64,10 @@ export default tseslint.config(
             'Key and index attribute names come from keys.ts or schema/tables.json, not literals.',
         },
         {
-          selector: 'TemplateElement[value.raw=/#/]',
+          // Only templates that interpolate something: those build a key out of values. A constant
+          // string containing "#" is a DynamoDB expression placeholder like "#status", which is
+          // normal in any repository.
+          selector: 'TemplateLiteral[expressions.length>0] > TemplateElement[value.raw=/#/]',
           message: 'Key strings are built only in src/persistence/keys.ts (spec section 6).',
         },
       ],

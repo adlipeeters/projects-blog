@@ -270,6 +270,12 @@ export const orderStatusLsiAttributes = (
 /** The LSI's sort key attribute name, for update expressions. */
 export const STATUS_LSI_ATTRIBUTE = 'LSI1SK';
 
+/** AP9's index: its name from schema/tables.json, its attribute name from here. */
+export const STATUS_LSI_INDEX = {
+  name: tables.tables.commerce.localSecondaryIndexes[0]?.name ?? 'customer-status-index',
+  sortAttribute: STATUS_LSI_ATTRIBUTE,
+} as const;
+
 /** AP9: `begins_with(LSI1SK, STATUS#<status>#)`, read strongly consistent. */
 export const orderStatusLsiPrefix = (status: string): string => `STATUS#${status}#`;
 
@@ -304,6 +310,17 @@ export const fulfillmentIndexAttributes = (
   GSI1PK: fulfillmentIndexPk(orderId),
   GSI1SK: fulfillmentIndexSk(placedAt, orderId),
 });
+
+/**
+ * The fulfillment index's attribute names, for the REMOVE that takes an order out of the queue.
+ *
+ * Removing the attributes, not the item: the order stays, it just stops being in the index. That is
+ * what "sparse" means in practice.
+ */
+export const FULFILLMENT_INDEX_ATTRIBUTES = {
+  partition: 'GSI1PK',
+  sort: 'GSI1SK',
+} as const;
 
 /** AP12: every shard, queried in parallel and merged by sort key. */
 export const fulfillmentIndexShards = (): readonly string[] =>

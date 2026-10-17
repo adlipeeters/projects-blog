@@ -164,6 +164,79 @@ module "checkout" {
   policies = { checkout = data.aws_iam_policy_document.checkout.json }
 }
 
+# AP8 and AP9. The LSI needs its own resource entry: permission on a table does not extend to its
+# indexes.
+data "aws_iam_policy_document" "list_orders" {
+  statement {
+    sid       = "QueryOrdersAndStatusIndex"
+    effect    = "Allow"
+    actions   = ["dynamodb:Query"]
+    resources = [module.tables.commerce_table_arn, module.tables.commerce_lsi_arns["customer-status-index"]]
+  }
+}
+
+module "list_orders" {
+  source = "../../modules/lambda-fn"
+
+  name        = "list-orders"
+  name_prefix = local.name_prefix
+  description = "AP8, AP9: a customer's orders, optionally by status."
+  dist_dir    = "${local.dist_handlers}/list-orders"
+
+  stage           = var.env
+  service_version = var.service_version
+  environment     = { COMMERCE_TABLE = module.tables.commerce_table_name }
+  policies        = { commerce = data.aws_iam_policy_document.list_orders.json }
+}
+
+# AP8 and AP10: the header by key, the lines by query. No index, no write.
+data "aws_iam_policy_document" "get_order" {
+  statement {
+    sid       = "ReadOrderAndLines"
+    effect    = "Allow"
+    actions   = ["dynamodb:GetItem", "dynamodb:Query"]
+    resources = [module.tables.commerce_table_arn]
+  }
+}
+
+module "get_order" {
+  source = "../../modules/lambda-fn"
+
+  name        = "get-order"
+  name_prefix = local.name_prefix
+  description = "AP8, AP10: an order with its line items."
+  dist_dir    = "${local.dist_handlers}/get-order"
+
+  stage           = var.env
+  service_version = var.service_version
+  environment     = { COMMERCE_TABLE = module.tables.commerce_table_name }
+  policies        = { commerce = data.aws_iam_policy_document.get_order.json }
+}
+
+# AP11: a conditional update, or a transaction when cancelling returns units to their buckets.
+data "aws_iam_policy_document" "update_order_status" {
+  statement {
+    sid       = "UpdateOrderAndReturnStock"
+    effect    = "Allow"
+    actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+    resources = [module.tables.commerce_table_arn]
+  }
+}
+
+module "update_order_status" {
+  source = "../../modules/lambda-fn"
+
+  name        = "update-order-status"
+  name_prefix = local.name_prefix
+  description = "AP11: change an order's status, conditional on status and version."
+  dist_dir    = "${local.dist_handlers}/update-order-status"
+
+  stage           = var.env
+  service_version = var.service_version
+  environment     = { COMMERCE_TABLE = module.tables.commerce_table_name }
+  policies        = { commerce = data.aws_iam_policy_document.update_order_status.json }
+}
+
 # ---------------------------------------------------------------------------
 # Routes (spec section 7)
 # ---------------------------------------------------------------------------
@@ -193,6 +266,18 @@ module "api" {
     "POST /checkout" = {
       function_name = module.checkout.function_name
       invoke_arn    = module.checkout.invoke_arn
+    }
+    "GET /customers/{customerId}/orders" = {
+      function_name = module.list_orders.function_name
+      invoke_arn    = module.list_orders.invoke_arn
+    }
+    "GET /customers/{customerId}/orders/{orderId}" = {
+      function_name = module.get_order.function_name
+      invoke_arn    = module.get_order.invoke_arn
+    }
+    "PATCH /customers/{customerId}/orders/{orderId}" = {
+      function_name = module.update_order_status.function_name
+      invoke_arn    = module.update_order_status.invoke_arn
     }
   }
 
