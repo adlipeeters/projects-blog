@@ -5,13 +5,21 @@
  * then the snapshot test in test/unit/keys.snapshot.test.ts. A changed key format must fail the
  * test run.
  *
- * Milestone M0: signatures only. Bodies are filled in per milestone, test first.
+ * Two rules worth repeating, because they are easy to get wrong and expensive to fix later:
+ *
+ * - Numbers inside sort keys are zero-padded, so they sort as numbers. `PRICE#9` sorts after
+ *   `PRICE#10` as a string; `PRICE#0000000009` does not.
+ * - Shard numbers come from one stable hash, never from randomness, so any reader can recompute
+ *   which shard an item is in. Stock buckets are the documented exception: the writer picks a
+ *   bucket at random and stores the choice in the order's allocations.
  */
 
 import tables from '../../schema/tables.json' with { type: 'json' };
 
-const notImplemented = (what: string): never => {
-  throw new Error(`keys.${what} is not implemented yet`);
+/** A full primary key. The generic attribute names let new entities fit without schema changes. */
+export type ItemKey = {
+  readonly PK: string;
+  readonly SK: string;
 };
 
 /** Shard counts live in schema/tables.json so readers and Terraform cannot disagree. */
@@ -31,165 +39,272 @@ function indexShards(table: keyof typeof tables.tables, indexName: string): numb
 // Helpers
 // ---------------------------------------------------------------------------
 
+const FNV_OFFSET_BASIS = 0x811c9dc5;
+const FNV_PRIME = 0x01000193;
+
 /**
  * FNV-1a, 32-bit. The one stable hash used for every shard number, so any reader can recompute
- * where an item lives. Never random (stock buckets are the documented exception).
+ * where an item lives.
+ *
+ * Deliberately not a cryptographic hash: it has to be identical in every runtime that reads this
+ * table, cheap enough to run per request, and small enough to write out by hand in an article.
  */
-export function fnv1a(_input: string): number {
-  return notImplemented('fnv1a');
+export function fnv1a(input: string): number {
+  let hash = FNV_OFFSET_BASIS;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, FNV_PRIME);
+  }
+  return hash >>> 0;
 }
 
-/** `fnv1a(id) % shardCount`, as a plain number. */
-export function shardOf(_id: string, _shardCount: number): number {
-  return notImplemented('shardOf');
+/** `fnv1a(id) % shardCount`. */
+export function shardOf(id: string, shardCount: number): number {
+  if (!Number.isInteger(shardCount) || shardCount < 1) {
+    throw new Error(`Shard count must be a positive integer, got ${shardCount}`);
+  }
+  return fnv1a(id) % shardCount;
 }
 
-/** Zero-pads a number for use inside a sort key. Prices and counts use 10 digits. */
-export function pad(_value: number, _digits = 10): string {
-  return notImplemented('pad');
+/** Every shard number of an index, for the parallel fan-out queries in AP12, AP14 and AP15. */
+const shardRange = (shardCount: number): readonly number[] =>
+  Array.from({ length: shardCount }, (_, shard) => shard);
+
+/**
+ * Zero-pads a number for use inside a sort key. Prices and counts use 10 digits (spec section 3).
+ */
+export function pad(value: number, digits = 10): string {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Cannot pad ${value}: expected a non-negative whole number`);
+  }
+  const padded = String(value).padStart(digits, '0');
+  if (padded.length > digits) {
+    throw new Error(`Cannot pad ${value} into ${digits} digits without losing sort order`);
+  }
+  return padded;
 }
 
 // ---------------------------------------------------------------------------
 // Catalog table
 // ---------------------------------------------------------------------------
 
+/** AP1: every item of one product, the META item and its variants. */
+export const productPartition = (productId: string): string => `PRODUCT#${productId}`;
+
 /** Product: `PRODUCT#<productId>` / `META` */
-export const productKey = (_productId: string): { PK: string; SK: string } =>
-  notImplemented('productKey');
+export const productKey = (productId: string): ItemKey => ({
+  PK: productPartition(productId),
+  SK: 'META',
+});
 
 /** Variant: `PRODUCT#<productId>` / `VARIANT#<sku>` */
-export const variantKey = (_productId: string, _sku: string): { PK: string; SK: string } =>
-  notImplemented('variantKey');
+export const variantKey = (productId: string, sku: string): ItemKey => ({
+  PK: productPartition(productId),
+  SK: `VARIANT#${sku}`,
+});
 
-/** AP1: every item of one product. */
-export const productPartition = (_productId: string): string => notImplemented('productPartition');
+/** AP1: the prefix that selects variants only. */
+export const variantSkPrefix = (): string => 'VARIANT#';
 
-/** AP2: `GSI1PK = CATEGORY#<categoryId>` on the catalog table. */
-export const categoryIndexPk = (_categoryId: string): string => notImplemented('categoryIndexPk');
+/**
+ * AP2: `GSI1PK = CATEGORY#<categoryId>` on the catalog table.
+ *
+ * Only the product META item carries this attribute, which is what makes `category-price-index`
+ * sparse: variants never appear in a category listing.
+ */
+export const categoryIndexPk = (categoryId: string): string => `CATEGORY#${categoryId}`;
 
-/** AP2: `GSI1SK = PRICE#<priceCents, 10 digits>#<productId>` */
-export const categoryPriceIndexSk = (_priceCents: number, _productId: string): string =>
-  notImplemented('categoryPriceIndexSk');
+/** AP2: `GSI1SK = PRICE#<priceCents, 10 digits>#<productId>`, cheapest first. */
+export const categoryPriceIndexSk = (priceCents: number, productId: string): string =>
+  `PRICE#${pad(priceCents)}#${productId}`;
+
+/** AP2: the two bounds of a BETWEEN on the price index. */
+export const categoryPriceBounds = (
+  minPriceCents: number,
+  maxPriceCents: number,
+): { readonly from: string; readonly to: string } => {
+  if (maxPriceCents < minPriceCents) {
+    throw new Error('Price range is inverted');
+  }
+  return {
+    from: `PRICE#${pad(minPriceCents)}`,
+    // The highest product id that can follow the padded price, so the upper bound is inclusive.
+    to: `PRICE#${pad(maxPriceCents)}#￿`,
+  };
+};
 
 // ---------------------------------------------------------------------------
 // Commerce table
 // ---------------------------------------------------------------------------
 
-/** Customer: `CUSTOMER#<customerId>` / `PROFILE` */
-export const customerKey = (_customerId: string): { PK: string; SK: string } =>
-  notImplemented('customerKey');
+/** A customer's partition holds the profile, the orders (AP8) and the holds. */
+export const customerPartition = (customerId: string): string => `CUSTOMER#${customerId}`;
 
-/** AP6 email marker: `EMAIL#<lowercased email>` / `EMAIL` */
-export const emailMarkerKey = (_email: string): { PK: string; SK: string } =>
-  notImplemented('emailMarkerKey');
+/** Customer: `CUSTOMER#<customerId>` / `PROFILE` */
+export const customerKey = (customerId: string): ItemKey => ({
+  PK: customerPartition(customerId),
+  SK: 'PROFILE',
+});
+
+/**
+ * AP6 email marker: `EMAIL#<lowercased email>` / `EMAIL`
+ *
+ * Its own item, so AP5 can make the email unique with `attribute_not_exists(PK)` inside the same
+ * transaction that creates the customer.
+ *
+ * Lowercased here as well as in the domain, because `EMAIL#Ada@example.com` and
+ * `EMAIL#ada@example.com` are different partitions and the uniqueness check would miss.
+ */
+export const emailMarkerKey = (email: string): ItemKey => ({
+  PK: `EMAIL#${email.trim().toLowerCase()}`,
+  SK: 'EMAIL',
+});
 
 /** Order header: `CUSTOMER#<customerId>` / `ORDER#<orderId>` */
-export const orderKey = (_customerId: string, _orderId: string): { PK: string; SK: string } =>
-  notImplemented('orderKey');
+export const orderKey = (customerId: string, orderId: string): ItemKey => ({
+  PK: customerPartition(customerId),
+  SK: `ORDER#${orderId}`,
+});
 
-/** AP8 prefix: `ORDER#` under a customer partition. */
-export const orderSkPrefix = (): string => notImplemented('orderSkPrefix');
+/** AP8: `begins_with(SK, ORDER#)` inside a customer partition, newest first. */
+export const orderSkPrefix = (): string => 'ORDER#';
 
 /** AP9 LSI sort key: `LSI1SK = STATUS#<status>#<orderId>` */
-export const orderStatusLsiSk = (_status: string, _orderId: string): string =>
-  notImplemented('orderStatusLsiSk');
+export const orderStatusLsiSk = (status: string, orderId: string): string =>
+  `STATUS#${status}#${orderId}`;
 
-/** AP9 prefix: `STATUS#<status>#` for begins_with on the LSI. */
-export const orderStatusLsiPrefix = (_status: string): string =>
-  notImplemented('orderStatusLsiPrefix');
+/** AP9: `begins_with(LSI1SK, STATUS#<status>#)`, read strongly consistent. */
+export const orderStatusLsiPrefix = (status: string): string => `STATUS#${status}#`;
 
-/** Order line: `ORDER#<orderId>` / `LINE#<sku>` */
-export const orderLineKey = (_orderId: string, _sku: string): { PK: string; SK: string } =>
-  notImplemented('orderLineKey');
+/** Order line: `ORDER#<orderId>` / `LINE#<sku>`. Immutable. */
+export const orderLineKey = (orderId: string, sku: string): ItemKey => ({
+  PK: orderLinePartition(orderId),
+  SK: `LINE#${sku}`,
+});
 
 /** AP10: every line of one order. */
-export const orderLinePartition = (_orderId: string): string =>
-  notImplemented('orderLinePartition');
+export const orderLinePartition = (orderId: string): string => `ORDER#${orderId}`;
 
-/** AP12 sparse sharded GSI: `GSI1PK = FULFILL#<0-9>`, sharded on orderId. */
-export const fulfillmentIndexPk = (_orderId: string): string =>
-  notImplemented('fulfillmentIndexPk');
+/**
+ * AP12 sparse sharded GSI: `GSI1PK = FULFILL#<0-9>`, sharded on the order id.
+ *
+ * Ten shards because every order placed during a drop writes this index, and a throttled GSI
+ * throttles writes to the base table.
+ */
+export const fulfillmentIndexPk = (orderId: string): string =>
+  `FULFILL#${shardOf(orderId, SHARD_COUNTS.fulfillment)}`;
 
-/** AP12: every shard of the fulfillment queue, for the parallel fan-out query. */
-export const fulfillmentIndexShards = (): string[] => notImplemented('fulfillmentIndexShards');
+/** AP12: every shard, queried in parallel and merged by sort key. */
+export const fulfillmentIndexShards = (): readonly string[] =>
+  shardRange(SHARD_COUNTS.fulfillment).map((shard) => `FULFILL#${shard}`);
 
 /** AP12 sort key: `GSI1SK = <placedAt>#<orderId>`, oldest first. */
-export const fulfillmentIndexSk = (_placedAt: string, _orderId: string): string =>
-  notImplemented('fulfillmentIndexSk');
+export const fulfillmentIndexSk = (placedAt: string, orderId: string): string =>
+  `${placedAt}#${orderId}`;
 
-/** Stock bucket: `STOCK#<sku>#<bucket 00-09>` / `STOCK` */
-export const stockBucketKey = (_sku: string, _bucket: number): { PK: string; SK: string } =>
-  notImplemented('stockBucketKey');
+/**
+ * Stock bucket: `STOCK#<sku>#<bucket 00-09>` / `STOCK`
+ *
+ * The bucket number is in the partition key, not the sort key. Items sharing a partition key share
+ * a partition, so a bucket in the sort key would spread nothing.
+ */
+export const stockBucketKey = (sku: string, bucket: number): ItemKey => ({
+  PK: `STOCK#${sku}#${pad(bucket, 2)}`,
+  SK: 'STOCK',
+});
 
-/** AP13: every bucket key of one SKU, for the BatchGetItem that sums availability. */
-export const stockBucketKeys = (
-  _sku: string,
-  _bucketCount: number,
-): Array<{ PK: string; SK: string }> => notImplemented('stockBucketKeys');
+/** AP13: every bucket of one SKU, for the strongly consistent BatchGetItem that sums them. */
+export const stockBucketKeys = (sku: string, bucketCount: number): readonly ItemKey[] =>
+  shardRange(bucketCount).map((bucket) => stockBucketKey(sku, bucket));
 
 /** Hold: `CUSTOMER#<customerId>` / `HOLD#<holdId>` */
-export const holdKey = (_customerId: string, _holdId: string): { PK: string; SK: string } =>
-  notImplemented('holdKey');
+export const holdKey = (customerId: string, holdId: string): ItemKey => ({
+  PK: customerPartition(customerId),
+  SK: `HOLD#${holdId}`,
+});
 
-/** AP15 sparse sharded GSI: `GSI3PK = HOLDS#<0-3>`, sharded on holdId. */
-export const holdsIndexPk = (_holdId: string): string => notImplemented('holdsIndexPk');
+/** AP15 sparse sharded GSI: `GSI3PK = HOLDS#<0-3>`, present only while the hold is HELD. */
+export const holdsIndexPk = (holdId: string): string =>
+  `HOLDS#${shardOf(holdId, SHARD_COUNTS.holds)}`;
 
-/** AP15: every shard the sweeper queries each minute. */
-export const holdsIndexShards = (): string[] => notImplemented('holdsIndexShards');
+/** AP15: the shards the sweeper queries every minute. */
+export const holdsIndexShards = (): readonly string[] =>
+  shardRange(SHARD_COUNTS.holds).map((shard) => `HOLDS#${shard}`);
 
-/** AP15 sort key: `GSI3SK = <expiresAt ISO>#<holdId>` */
-export const holdsIndexSk = (_expiresAt: string, _holdId: string): string =>
-  notImplemented('holdsIndexSk');
+/** AP15 sort key: `GSI3SK = <expiresAt ISO>#<holdId>`, so `GSI3SK < now` finds expired holds. */
+export const holdsIndexSk = (expiresAt: string, holdId: string): string => `${expiresAt}#${holdId}`;
 
 /** Idempotency key: `IDEMPOTENCY#<customerId>#<key>` / `IDEMPOTENCY` */
-export const idempotencyKey = (_customerId: string, _key: string): { PK: string; SK: string } =>
-  notImplemented('idempotencyKey');
+export const idempotencyKey = (customerId: string, key: string): ItemKey => ({
+  PK: `IDEMPOTENCY#${customerId}#${key}`,
+  SK: 'IDEMPOTENCY',
+});
 
 /** Sales aggregate: `SALES#<categoryId>#<yyyy-mm-dd>` / `SKU#<sku>` */
-export const salesAggregateKey = (
-  _categoryId: string,
-  _date: string,
-  _sku: string,
-): { PK: string; SK: string } => notImplemented('salesAggregateKey');
+export const salesAggregateKey = (categoryId: string, date: string, sku: string): ItemKey => ({
+  PK: `SALES#${categoryId}#${date}`,
+  SK: `SKU#${sku}`,
+});
 
-/** AP14 sharded GSI: `GSI2PK = BEST#<categoryId>#<yyyy-mm-dd>#<0-3>`, sharded on sku. */
-export const bestsellersIndexPk = (_categoryId: string, _date: string, _sku: string): string =>
-  notImplemented('bestsellersIndexPk');
+/**
+ * AP14 sharded GSI: `GSI2PK = BEST#<categoryId>#<yyyy-mm-dd>#<0-3>`, sharded on the SKU.
+ *
+ * The sort key is the `unitsSold` Number itself, so a single `ADD unitsSold :n` keeps the index
+ * current without a read.
+ */
+export const bestsellersIndexPk = (categoryId: string, date: string, sku: string): string =>
+  `BEST#${categoryId}#${date}#${shardOf(sku, SHARD_COUNTS.bestsellers)}`;
 
-/** AP14: every shard of one category and day. */
-export const bestsellersIndexShards = (_categoryId: string, _date: string): string[] =>
-  notImplemented('bestsellersIndexShards');
+/** AP14: every shard of one category and day, merged to a top N. */
+export const bestsellersIndexShards = (categoryId: string, date: string): readonly string[] =>
+  shardRange(SHARD_COUNTS.bestsellers).map((shard) => `BEST#${categoryId}#${date}#${shard}`);
 
-/** Notification marker: `NOTIFY#<type>#<entityId>` / `NOTIFY` */
-export const notificationMarkerKey = (
-  _type: string,
-  _entityId: string,
-): { PK: string; SK: string } => notImplemented('notificationMarkerKey');
+/**
+ * Notification marker: `NOTIFY#<type>#<entityId>` / `NOTIFY`
+ *
+ * Written with `attribute_not_exists` so a replayed stream record is skipped instead of
+ * double-counting an aggregate or sending a second notification.
+ */
+export const notificationMarkerKey = (type: string, entityId: string): ItemKey => ({
+  PK: `NOTIFY#${type}#${entityId}`,
+  SK: 'NOTIFY',
+});
 
-/** Backfill checkpoint: `BACKFILL#<jobId>` / `SEGMENT#<n>` */
-export const backfillCheckpointKey = (
-  _jobId: string,
-  _segment: number,
-): { PK: string; SK: string } => notImplemented('backfillCheckpointKey');
+/** Backfill checkpoint: `BACKFILL#<jobId>` / `SEGMENT#<n>` (spec section 10). */
+export const backfillCheckpointKey = (jobId: string, segment: number): ItemKey => ({
+  PK: `BACKFILL#${jobId}`,
+  SK: `SEGMENT#${segment}`,
+});
 
 /** AP16, milestone M7: `GSI4PK = STATUS#<status>#<yyyy-mm-dd>` */
-export const statusDateIndexPk = (_status: string, _date: string): string =>
-  notImplemented('statusDateIndexPk');
+export const statusDateIndexPk = (status: string, date: string): string =>
+  `STATUS#${status}#${date}`;
 
 /** AP16, milestone M7: `GSI4SK = <placedAt>#<orderId>` */
-export const statusDateIndexSk = (_placedAt: string, _orderId: string): string =>
-  notImplemented('statusDateIndexSk');
+export const statusDateIndexSk = (placedAt: string, orderId: string): string =>
+  `${placedAt}#${orderId}`;
 
 // ---------------------------------------------------------------------------
 // Carts table (global)
 // ---------------------------------------------------------------------------
 
+/** AP3: a cart and all of its lines. */
+export const cartPartition = (cartId: string): string => `CART#${cartId}`;
+
 /** Cart header: `CART#<cartId>` / `META` */
-export const cartKey = (_cartId: string): { PK: string; SK: string } => notImplemented('cartKey');
+export const cartKey = (cartId: string): ItemKey => ({
+  PK: cartPartition(cartId),
+  SK: 'META',
+});
 
 /** Cart line: `CART#<cartId>` / `LINE#<sku>` */
-export const cartLineKey = (_cartId: string, _sku: string): { PK: string; SK: string } =>
-  notImplemented('cartLineKey');
+export const cartLineKey = (cartId: string, sku: string): ItemKey => ({
+  PK: cartPartition(cartId),
+  SK: `LINE#${sku}`,
+});
 
-/** AP3: a cart and all of its lines. */
-export const cartPartition = (_cartId: string): string => notImplemented('cartPartition');
+/** AP4: the prefix that selects a cart's lines without its header. */
+export const cartLineSkPrefix = (): string => 'LINE#';
+
+/** The date part of an ISO timestamp, used by the aggregate and AP16 keys. */
+export const isoDate = (at: Date): string => at.toISOString().slice(0, 10);

@@ -18,6 +18,8 @@
     "test:e2e": "vitest run test/e2e",
     "test:watch": "vitest test/unit",
     "build": "node scripts/build.mjs",
+    "deploy": "pnpm build && terraform -chdir=infra/envs/dev apply",
+    "deploy:fn": "pnpm build && terraform -chdir=infra/envs/dev apply -target=module.health",
     "seed": "tsx scripts/seed.ts",
     "verify-stock": "tsx scripts/verify-stock.ts",
     "backfill": "tsx scripts/backfill-status-index.ts",
