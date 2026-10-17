@@ -2,10 +2,12 @@ import { describe, it, expect } from 'vitest';
 import * as keys from '../../src/persistence/keys.js';
 
 /**
- * The CI gate from spec section 11: every key format in spec section 6, pinned.
+ * The gate from spec section 11: every key format in spec section 6, pinned. Run locally, since
+ * this project has no CI.
  *
  * Skipped while keys.ts is a signature stub (M0). Unskip in M1 together with the first key
- * builders, and from then on a changed key format fails CI and needs human review.
+ * builders, and from then on a changed key format fails the test run and needs human
+ * review.
  */
 describe.skip('key formats (spec section 6)', () => {
   it('catalog keys', () => {

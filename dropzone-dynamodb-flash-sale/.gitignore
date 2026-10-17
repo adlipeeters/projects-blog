@@ -9,6 +9,7 @@ coverage
 *.tfstate
 *.tfstate.*
 *.tfplan
+tfplan
 crash.log
 
 # The build spec stays private until the articles are published (see docs/README.md).

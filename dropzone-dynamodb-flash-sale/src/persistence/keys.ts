@@ -2,7 +2,8 @@
  * The ONLY place DynamoDB key strings are built.
  *
  * Every format here comes from docs/SPEC.md section 6. Change the spec first, then this file,
- * then the snapshot test in test/unit/keys.snapshot.test.ts. A changed key format must fail CI.
+ * then the snapshot test in test/unit/keys.snapshot.test.ts. A changed key format must fail the
+ * test run.
  *
  * Milestone M0: signatures only. Bodies are filled in per milestone, test first.
  */

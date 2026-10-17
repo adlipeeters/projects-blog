@@ -35,6 +35,9 @@ test/               unit, integration, e2e, load
 
 ## Commands
 
+Infrastructure is applied from a laptop. There is no CI, so the checks below are the gate and run
+before a commit.
+
 ```bash
 pnpm install
 pnpm typecheck
@@ -47,17 +50,17 @@ pnpm tf:plan            # terraform plan in infra/envs/dev
 
 ## Milestones
 
-| #   | Milestone                                                                            | Status      |
-| --- | ------------------------------------------------------------------------------------ | ----------- |
-| M0  | Scaffold: repo layout, `schema/tables.json`, CI, Terraform backend, lambda-fn module | in progress |
-| M1  | Catalog table (provisioned + auto scaling), AP1, AP2, seed script                    | pending     |
-| M2  | Commerce table with LSI, Streams, TTL, PITR; AP5 to AP11 with plain checkout         | pending     |
-| M3  | `fulfillment-index` and warehouse queue (AP12)                                       | pending     |
-| M4  | Streams to `outbox-publisher` to EventBridge; `sales-aggregator` + AP14              | pending     |
-| M5  | Carts global table, AP3, AP4, `cart-abandonment` in both regions                     | pending     |
-| M6  | Flash sale: stock buckets, holds, sweeper, load tests A and B                        | pending     |
-| M7  | Live migration: `status-date-index` + backfill + AP16                                | pending     |
-| M8  | Hardening: alarms, dashboard, cost write-up per table                                | pending     |
+| #   | Milestone                                                                             | Status  |
+| --- | ------------------------------------------------------------------------------------- | ------- |
+| M0  | Scaffold: repo layout, `schema/tables.json`, Terraform backend, lambda-fn module, API | done    |
+| M1  | Catalog table (provisioned + auto scaling), AP1, AP2, seed script                     | pending |
+| M2  | Commerce table with LSI, Streams, TTL, PITR; AP5 to AP11 with plain checkout          | pending |
+| M3  | `fulfillment-index` and warehouse queue (AP12)                                        | pending |
+| M4  | Streams to `outbox-publisher` to EventBridge; `sales-aggregator` + AP14               | pending |
+| M5  | Carts global table, AP3, AP4, `cart-abandonment` in both regions                      | pending |
+| M6  | Flash sale: stock buckets, holds, sweeper, load tests A and B                         | pending |
+| M7  | Live migration: `status-date-index` + backfill + AP16                                 | pending |
+| M8  | Hardening: alarms, dashboard, cost write-up per table                                 | pending |
 
 ## Articles
 

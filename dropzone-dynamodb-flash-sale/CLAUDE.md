@@ -72,4 +72,7 @@ integration test first, then the repository method.
 - Regions: `eu-central-1` primary, `us-east-1` carts replica only.
 - Node 22, arm64 Lambdas, TypeScript strict with `noUncheckedIndexedAccess`.
 - pnpm for packages, Terraform for all infrastructure. No CDK, no CloudFormation by hand.
+- No CI. Infrastructure is applied from a laptop and the local checks are the gate: `pnpm
+typecheck`, `pnpm lint`, `pnpm test:unit`, `pnpm test:integration`. Do not add GitHub Actions
+  workflows or a CI IAM role.
 - No ORM for DynamoDB. Key design must stay visible.
