@@ -1,25 +1,20 @@
 /**
- * The order repository. AP7: place an order, in one transaction.
+ * The order repository: AP7 to AP11.
  *
- * The shape of the transaction is the design (spec section 7):
+ * The checkout transaction is four kinds of item written atomically (spec section 7):
+ * the idempotency item, one conditional decrement per stock bucket, the order header, and the
+ * lines. All of it lands or none of it does, so no oversell, no double order and no lost stock are
+ * properties of the database rather than of careful code.
  *
- *   1. put the idempotency item, condition attribute_not_exists       <- this request is new
- *   2. for each line, decrement a stock bucket, condition available >= qty  <- the units exist
- *   3. put the order header, condition attribute_not_exists
- *   4. put each order line
- *
- * All of it happens or none of it does, which makes "no oversell, no double order, no lost stock" a
- * property of the database rather than of careful code. A transaction allows up to 100 actions and
- * costs 2 write units per item, so the 20-line cap keeps every checkout well inside the limit.
- *
- * Nothing is written when a transaction is cancelled, so a failed attempt leaves no idempotency key
- * and no half-order behind.
+ * A cancelled transaction writes nothing, so a failed attempt leaves no idempotency key and no
+ * half-order behind.
  */
 
 import {
   GetCommand,
   QueryCommand,
   TransactWriteCommand,
+  type TransactWriteCommandInput,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 
@@ -125,13 +120,167 @@ const cancellationReasons = (error: unknown): readonly CancellationReason[] =>
 const CONDITION_FAILED = 'ConditionalCheckFailed';
 const TRANSACTION_CONFLICT = 'TransactionConflict';
 
+/** Where each kind of item sits in the transaction, so a cancellation reason can be read by index. */
+const IDEMPOTENCY_POSITION = 0;
+const FIRST_STOCK_POSITION = 1;
+
+type PricedLine = {
+  readonly line: OrderLine;
+  readonly buckets: number;
+};
+
+/**
+ * What a cancelled transaction means for this request.
+ *
+ * DynamoDB reports one reason per transaction item, in the order the items were sent, and says
+ * nothing about which business rule that was. Turning positions into a verdict is the whole trick,
+ * and keeping it in one function makes it testable and readable.
+ */
+type Verdict =
+  | { readonly kind: 'replay' }
+  | { readonly kind: 'rotate'; readonly empty: readonly Allocation[] }
+  | { readonly kind: 'conflict' }
+  | { readonly kind: 'unexpected' };
+
+export function classifyCancellation(
+  reasons: readonly CancellationReason[],
+  allocations: readonly Allocation[],
+): Verdict {
+  if (reasons[IDEMPOTENCY_POSITION]?.Code === CONDITION_FAILED) {
+    return { kind: 'replay' };
+  }
+
+  const empty = allocations.filter(
+    (_, index) => reasons[index + FIRST_STOCK_POSITION]?.Code === CONDITION_FAILED,
+  );
+  if (empty.length > 0) {
+    return { kind: 'rotate', empty };
+  }
+
+  if (reasons.some((reason) => reason.Code === TRANSACTION_CONFLICT)) {
+    return { kind: 'conflict' };
+  }
+
+  return { kind: 'unexpected' };
+}
+
+/** One bucket per line: the first in this request's rotation that has not already refused it. */
+function chooseBuckets(
+  priced: readonly PricedLine[],
+  exhausted: ReadonlyMap<Sku, ReadonlySet<number>>,
+): Allocation[] {
+  return priced.map((entry) => {
+    const skipped = exhausted.get(entry.line.sku) ?? new Set<number>();
+    const bucket = bucketOrder(entry.buckets).find((candidate) => !skipped.has(candidate));
+
+    if (bucket === undefined) {
+      count(MetricName.CheckoutSoldOut);
+      throw new SoldOutError(entry.line.sku);
+    }
+
+    return { sku: entry.line.sku, bucket, qty: entry.line.qty };
+  });
+}
+
+/** Records the buckets that refused this request, and gives up on a sku once none are left. */
+function rememberEmptyBuckets(
+  empty: readonly Allocation[],
+  priced: readonly PricedLine[],
+  exhausted: Map<Sku, Set<number>>,
+): void {
+  for (const allocation of empty) {
+    const skipped = exhausted.get(allocation.sku) ?? new Set<number>();
+    skipped.add(allocation.bucket);
+    exhausted.set(allocation.sku, skipped);
+
+    const buckets = priced.find((entry) => entry.line.sku === allocation.sku)?.buckets ?? 1;
+    if (skipped.size >= buckets) {
+      count(MetricName.CheckoutSoldOut);
+      throw new SoldOutError(allocation.sku);
+    }
+  }
+}
+
+const draftOrder = (input: {
+  readonly orderId: OrderId;
+  readonly customerId: CustomerId;
+  readonly lines: readonly OrderLine[];
+  readonly allocations: readonly Allocation[];
+  readonly now: Date;
+}): Order => ({
+  orderId: input.orderId,
+  customerId: input.customerId,
+  status: 'PLACED',
+  total: orderTotal(input.lines),
+  placedAt: input.now.toISOString(),
+  updatedAt: input.now.toISOString(),
+  allocations: input.allocations,
+  version: 1,
+});
+
+/**
+ * The four kinds of item that make up a checkout, in the order the cancellation positions above
+ * assume.
+ */
+function checkoutItems(input: {
+  readonly table: string;
+  readonly request: CheckoutRequest;
+  readonly order: Order;
+  readonly lines: readonly OrderLine[];
+  readonly hash: string;
+  readonly now: Date;
+}): NonNullable<TransactWriteCommandInput['TransactItems']> {
+  const { table, request, order, lines, hash, now } = input;
+
+  return [
+    // 1. This request is new.
+    {
+      Put: {
+        TableName: table,
+        Item: idempotencyToItem({
+          customerId: request.customerId,
+          key: request.idempotencyKey,
+          orderId: order.orderId,
+          requestHash: hash,
+          ttl: ttlInHours(now, IDEMPOTENCY_TTL_HOURS),
+        }),
+        ConditionExpression: `attribute_not_exists(${PARTITION_ATTRIBUTE})`,
+      },
+    },
+    // 2. The units exist. This condition is the entire no-oversell guarantee.
+    ...order.allocations.map((allocation) => ({
+      Update: {
+        TableName: table,
+        Key: stockBucketKey(allocation.sku, allocation.bucket),
+        UpdateExpression: 'SET available = available - :qty, version = version + :one',
+        ConditionExpression: 'available >= :qty',
+        ExpressionAttributeValues: { ':qty': allocation.qty, ':one': 1 },
+        ReturnValuesOnConditionCheckFailure: 'ALL_OLD' as const,
+      },
+    })),
+    // 3. The order itself.
+    {
+      Put: {
+        TableName: table,
+        Item: orderToItem(order),
+        ConditionExpression: `attribute_not_exists(${PARTITION_ATTRIBUTE})`,
+      },
+    },
+    // 4. Its lines, immutable from here on.
+    ...lines.map((line) => ({
+      Put: {
+        TableName: table,
+        Item: orderLineToItem(order.orderId, request.customerId, line),
+      },
+    })),
+  ];
+}
+
 export function orderRepository(catalog = catalogRepository()) {
   const commerce = (): string => commerceTable();
 
   /** Prices and bucket counts come from the catalog, never from the client (spec section 7). */
-  async function priceLines(
-    lines: readonly CheckoutLine[],
-  ): Promise<{ readonly line: OrderLine; readonly buckets: number }[]> {
+  async function priceLines(lines: readonly CheckoutLine[]): Promise<PricedLine[]> {
     const skus = lines.map((line) => line.sku);
     const pointers = await catalog.resolveSkus(skus);
     const variants = await catalog.loadVariants([...pointers.values()]);
@@ -158,6 +307,9 @@ export function orderRepository(catalog = catalogRepository()) {
   }
 
   return {
+    /**
+     * AP7. Returns the placed order, or the original one when this request was already handled.
+     */
     async checkout(request: CheckoutRequest, now = new Date()): Promise<CheckoutResult> {
       if (request.lines.length === 0) {
         throw new ValidationError('An order needs at least one line');
@@ -171,8 +323,8 @@ export function orderRepository(catalog = catalogRepository()) {
       const priced = await priceLines(request.lines);
       const lines = priced.map((entry) => entry.line);
 
-      // The hash covers what the client asked for, not what the server priced it at, so a retry of
-      // the same request matches even if the catalog price changed in between.
+      // Hashed from what the client asked for, not from what the server priced it at, so a retry
+      // matches even if the catalog price moved in between.
       const hash = requestHash({
         lines: request.lines.map((line) => ({ sku: line.sku, qty: line.qty })),
       });
@@ -181,83 +333,32 @@ export function orderRepository(catalog = catalogRepository()) {
       // attempts keeps the logs readable without risking a duplicate.
       const orderId = newOrderId();
 
-      /** Buckets this request has already found empty, per sku. */
       const exhausted = new Map<Sku, Set<number>>();
-
-      // Rotating past an empty bucket is not a conflict retry, so each gets its own budget.
-      const rotationBudget = priced.reduce((total, entry) => total + entry.buckets, 0);
+      // An empty bucket is not contention, so rotations and conflict retries get separate budgets.
+      const rotations = priced.reduce((total, entry) => total + entry.buckets, 0);
       let conflicts = 0;
 
-      for (let iteration = 0; iteration < MAX_CONFLICT_ATTEMPTS + rotationBudget; iteration += 1) {
-        const allocations = priced.map((entry): Allocation => {
-          const skipped = exhausted.get(entry.line.sku) ?? new Set<number>();
-          const bucket = bucketOrder(entry.buckets).find((candidate) => !skipped.has(candidate));
-
-          if (bucket === undefined) {
-            count(MetricName.CheckoutSoldOut);
-            throw new SoldOutError(entry.line.sku);
-          }
-
-          return { sku: entry.line.sku, bucket, qty: entry.line.qty };
-        });
-
-        const order: Order = {
+      for (let attempt = 0; attempt < MAX_CONFLICT_ATTEMPTS + rotations; attempt += 1) {
+        const allocations = chooseBuckets(priced, exhausted);
+        const order = draftOrder({
           orderId,
           customerId: request.customerId,
-          status: 'PLACED',
-          total: orderTotal(lines),
-          placedAt: now.toISOString(),
-          updatedAt: now.toISOString(),
+          lines,
           allocations,
-          version: 1,
-        };
-
-        // Positions, so a cancellation reason can be matched to what it refers to.
-        const idempotencyPosition = 0;
-        const stockPositions = allocations.map((_, index) => index + 1);
+          now,
+        });
 
         try {
           await documentClient().send(
             new TransactWriteCommand({
-              TransactItems: [
-                {
-                  Put: {
-                    TableName: commerce(),
-                    Item: idempotencyToItem({
-                      customerId: request.customerId,
-                      key: request.idempotencyKey,
-                      orderId,
-                      requestHash: hash,
-                      ttl: ttlInHours(now, IDEMPOTENCY_TTL_HOURS),
-                    }),
-                    ConditionExpression: `attribute_not_exists(${PARTITION_ATTRIBUTE})`,
-                  },
-                },
-                ...allocations.map((allocation) => ({
-                  Update: {
-                    TableName: commerce(),
-                    Key: stockBucketKey(allocation.sku, allocation.bucket),
-                    UpdateExpression: 'SET available = available - :qty, version = version + :one',
-                    // The whole no-oversell guarantee is this one line.
-                    ConditionExpression: 'available >= :qty',
-                    ExpressionAttributeValues: { ':qty': allocation.qty, ':one': 1 },
-                    ReturnValuesOnConditionCheckFailure: 'ALL_OLD' as const,
-                  },
-                })),
-                {
-                  Put: {
-                    TableName: commerce(),
-                    Item: orderToItem(order),
-                    ConditionExpression: `attribute_not_exists(${PARTITION_ATTRIBUTE})`,
-                  },
-                },
-                ...lines.map((line) => ({
-                  Put: {
-                    TableName: commerce(),
-                    Item: orderLineToItem(orderId, request.customerId, line),
-                  },
-                })),
-              ],
+              TransactItems: checkoutItems({
+                table: commerce(),
+                request,
+                order,
+                lines,
+                hash,
+                now,
+              }),
             }),
           );
 
@@ -268,56 +369,29 @@ export function orderRepository(catalog = catalogRepository()) {
             throw error;
           }
 
-          const reasons = cancellationReasons(error);
+          const verdict = classifyCancellation(cancellationReasons(error), allocations);
 
-          // The idempotency item already exists: this request has been handled before.
-          if (reasons[idempotencyPosition]?.Code === CONDITION_FAILED) {
-            return await this.replay(request, hash);
-          }
+          switch (verdict.kind) {
+            case 'replay':
+              return await this.replay(request, hash);
 
-          // A bucket could not satisfy its line. Remember it and rotate to another one.
-          let rotated = false;
-          for (const [index, position] of stockPositions.entries()) {
-            if (reasons[position]?.Code !== CONDITION_FAILED) {
+            case 'rotate':
+              rememberEmptyBuckets(verdict.empty, priced, exhausted);
+              logger.debug('Stock bucket empty, rotating', { attempt });
               continue;
-            }
 
-            const allocation = allocations[index];
-            const entry = priced[index];
-            if (allocation === undefined || entry === undefined) {
+            case 'conflict':
+              conflicts += 1;
+              count(MetricName.TxConflictRetries);
+              if (conflicts >= MAX_CONFLICT_ATTEMPTS) {
+                throw new ConflictError('Too much contention on checkout, please retry');
+              }
+              await sleep(jitteredBackoffMs(conflicts));
               continue;
-            }
 
-            const skipped = exhausted.get(allocation.sku) ?? new Set<number>();
-            skipped.add(allocation.bucket);
-            exhausted.set(allocation.sku, skipped);
-            rotated = true;
-
-            if (skipped.size >= entry.buckets) {
-              count(MetricName.CheckoutSoldOut);
-              throw new SoldOutError(allocation.sku);
-            }
+            default:
+              throw error;
           }
-
-          if (rotated) {
-            logger.debug('Stock bucket empty, rotating', { iteration });
-            continue;
-          }
-
-          // Contention on the same items. Retry with jittered backoff, a few times only.
-          if (reasons.some((reason) => reason.Code === TRANSACTION_CONFLICT)) {
-            conflicts += 1;
-            count(MetricName.TxConflictRetries);
-
-            if (conflicts >= MAX_CONFLICT_ATTEMPTS) {
-              throw new ConflictError('Too much contention on checkout, please retry');
-            }
-
-            await sleep(jitteredBackoffMs(conflicts));
-            continue;
-          }
-
-          throw error;
         }
       }
 

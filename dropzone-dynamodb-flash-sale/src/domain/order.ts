@@ -82,6 +82,20 @@ export const needsFulfillment = (status: OrderStatus): boolean =>
 /** Whether cancelling should return units to their stock buckets. */
 export const holdsStock = (status: OrderStatus): boolean => status !== 'CANCELLED';
 
+/**
+ * One row of the warehouse queue (AP12).
+ *
+ * Smaller than an Order because the index projects only what a picker needs: who it is for, what
+ * state it is in, and what it is worth. A full order needs a read of the base table.
+ */
+export type FulfillmentEntry = {
+  readonly orderId: OrderId;
+  readonly customerId: CustomerId;
+  readonly status: OrderStatus;
+  readonly total: Money;
+  readonly placedAt: string;
+};
+
 export const lineTotal = (line: OrderLine): Money => times(line.unitPrice, line.qty);
 
 export const orderTotal = (lines: readonly OrderLine[]): Money => sum(lines.map(lineTotal));

@@ -23,18 +23,35 @@ import {
   sku as parseSku,
 } from '../../domain/ids.js';
 import { EUR, money } from '../../domain/money.js';
-import type { Allocation, Order, OrderLine, OrderStatus } from '../../domain/order.js';
+import type {
+  Allocation,
+  FulfillmentEntry,
+  Order,
+  OrderLine,
+  OrderStatus,
+} from '../../domain/order.js';
 import { ORDER_STATUSES, needsFulfillment } from '../../domain/order.js';
 import { EntityType, SCHEMA_VERSION } from '../entity-types.js';
 import {
+  FULFILLMENT_INDEX_ATTRIBUTES,
   fulfillmentIndexAttributes,
   orderKey,
   orderLineKey,
   orderStatusLsiAttributes,
+  parseFulfillmentIndexSk,
 } from '../keys.js';
 import { buildDomain, parseItem } from './parse.js';
 
 const statusSchema = z.enum(ORDER_STATUSES);
+
+/** Reads the index's sort key without naming the attribute outside keys.ts. */
+const fulfillmentIndexSortKeyOf = (record: Record<string, unknown>): string => {
+  const value = record[FULFILLMENT_INDEX_ATTRIBUTES.sort];
+  if (typeof value !== 'string') {
+    throw new Error('Index item has no fulfillment sort key');
+  }
+  return value;
+};
 
 const allocationSchema = z.object({
   sku: z.string(),
@@ -126,6 +143,33 @@ export function orderLineToItem(
     unitPriceCents: line.unitPrice.amountCents,
     currency: line.unitPrice.currency,
   };
+}
+
+/**
+ * AP12: one queue row, built from the index projection plus the keys the index always carries.
+ */
+const fulfillmentIndexItemSchema = z.object({
+  customerId: z.string(),
+  status: statusSchema,
+  totalCents: z.number().int().nonnegative(),
+});
+
+export function fulfillmentEntryFromIndexItem(raw: unknown): FulfillmentEntry {
+  const item = parseItem(fulfillmentIndexItemSchema, EntityType.Order, raw);
+  const record = raw as Record<string, unknown>;
+
+  return buildDomain(EntityType.Order, raw, () => {
+    const sortKey = fulfillmentIndexSortKeyOf(record);
+    const { placedAt, orderId } = parseFulfillmentIndexSk(sortKey);
+
+    return {
+      orderId: parseOrderId(orderId),
+      customerId: parseCustomerId(item.customerId),
+      status: item.status,
+      total: money(item.totalCents, EUR),
+      placedAt,
+    };
+  });
 }
 
 export function orderLineFromItem(raw: unknown): OrderLine {

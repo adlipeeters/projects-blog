@@ -311,6 +311,13 @@ export const fulfillmentIndexAttributes = (
   GSI1SK: fulfillmentIndexSk(placedAt, orderId),
 });
 
+/** AP12's index: its name from schema/tables.json, its attribute names from here. */
+export const FULFILLMENT_INDEX = {
+  name: findIndex('commerce', 'fulfillment-index').name,
+  partitionAttribute: 'GSI1PK',
+  sortAttribute: 'GSI1SK',
+} as const;
+
 /**
  * The fulfillment index's attribute names, for the REMOVE that takes an order out of the queue.
  *
@@ -325,6 +332,37 @@ export const FULFILLMENT_INDEX_ATTRIBUTES = {
 /** AP12: every shard, queried in parallel and merged by sort key. */
 export const fulfillmentIndexShards = (): readonly string[] =>
   shardRange(SHARD_COUNTS.fulfillment).map((shard) => `FULFILL#${shard}`);
+
+const ORDER_PREFIX = 'ORDER#';
+
+/** The order id back out of an order header's sort key. */
+export function orderIdFromSortKey(sortKey: string): string {
+  if (!sortKey.startsWith(ORDER_PREFIX)) {
+    throw new Error(`Not an order sort key: ${sortKey}`);
+  }
+  return sortKey.slice(ORDER_PREFIX.length);
+}
+
+/**
+ * The two values packed into the fulfillment index's sort key.
+ *
+ * The index projection is small on purpose and does not include `placedAt`, but the sort key is
+ * built from it, so it is already there. Keys carry data; reading it back beats paying to store it
+ * twice.
+ */
+export function parseFulfillmentIndexSk(sortKey: string): {
+  readonly placedAt: string;
+  readonly orderId: string;
+} {
+  const separator = sortKey.indexOf('#');
+  if (separator === -1) {
+    throw new Error(`Not a fulfillment index sort key: ${sortKey}`);
+  }
+  return {
+    placedAt: sortKey.slice(0, separator),
+    orderId: sortKey.slice(separator + 1),
+  };
+}
 
 /** AP12 sort key: `GSI1SK = <placedAt>#<orderId>`, oldest first. */
 export const fulfillmentIndexSk = (placedAt: string, orderId: string): string =>

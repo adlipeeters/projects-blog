@@ -237,6 +237,31 @@ module "update_order_status" {
   policies        = { commerce = data.aws_iam_policy_document.update_order_status.json }
 }
 
+# AP12: the index only. The base table is not in the resource list, so a picker screen cannot read
+# an order item even by accident, and the projection is all it gets.
+data "aws_iam_policy_document" "warehouse_queue" {
+  statement {
+    sid       = "QueryFulfillmentIndex"
+    effect    = "Allow"
+    actions   = ["dynamodb:Query"]
+    resources = [module.tables.commerce_index_arns["fulfillment-index"]]
+  }
+}
+
+module "warehouse_queue" {
+  source = "../../modules/lambda-fn"
+
+  name        = "warehouse-queue"
+  name_prefix = local.name_prefix
+  description = "AP12: unfulfilled orders, oldest first, merged across index shards."
+  dist_dir    = "${local.dist_handlers}/warehouse-queue"
+
+  stage           = var.env
+  service_version = var.service_version
+  environment     = { COMMERCE_TABLE = module.tables.commerce_table_name }
+  policies        = { commerce-index = data.aws_iam_policy_document.warehouse_queue.json }
+}
+
 # ---------------------------------------------------------------------------
 # Routes (spec section 7)
 # ---------------------------------------------------------------------------
@@ -278,6 +303,10 @@ module "api" {
     "PATCH /customers/{customerId}/orders/{orderId}" = {
       function_name = module.update_order_status.function_name
       invoke_arn    = module.update_order_status.invoke_arn
+    }
+    "GET /warehouse/queue" = {
+      function_name = module.warehouse_queue.function_name
+      invoke_arn    = module.warehouse_queue.invoke_arn
     }
   }
 
