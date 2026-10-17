@@ -53,10 +53,19 @@ variable "environment" {
   default     = {}
 }
 
-variable "policy_json" {
-  description = "Inline least-privilege IAM policy for this function, passed in by the caller (spec section 12). Null means the function needs nothing beyond logs and tracing."
-  type        = string
-  default     = null
+variable "policies" {
+  description = <<-EOT
+    Inline least-privilege IAM policies for this function, passed in by the caller (spec section 12),
+    keyed by a short name that becomes the inline policy name: { catalog = data.aws_iam_policy_document.x.json }.
+
+    A map rather than a single string because the keys are known at plan time while the documents
+    are not: they refer to table and index ARNs that do not exist until apply. A `count` on an
+    unknown value cannot be planned at all, which is the error this shape avoids.
+
+    Empty means the function needs nothing beyond its own logs and traces.
+  EOT
+  type        = map(string)
+  default     = {}
 }
 
 variable "log_retention_days" {

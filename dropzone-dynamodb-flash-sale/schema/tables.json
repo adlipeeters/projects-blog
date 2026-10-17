@@ -24,7 +24,7 @@
           "hashKey": "GSI1PK",
           "rangeKey": "GSI1SK",
           "projectionType": "INCLUDE",
-          "nonKeyAttributes": ["name", "priceCents", "imageUrl"],
+          "nonKeyAttributes": ["name", "fromPriceCents", "imageUrl"],
           "sparse": true,
           "shards": 1,
           "accessPatterns": ["AP2"]
@@ -38,7 +38,7 @@
       "contributorInsights": false,
       "autoscaling": {
         "read": { "min": 5, "max": 100 },
-        "write": { "min": 1, "max": 25 },
+        "write": { "min": 5, "max": 25 },
         "targetUtilizationPercent": 70
       }
     },

@@ -67,11 +67,11 @@ resource "aws_iam_role_policy" "baseline" {
 }
 
 resource "aws_iam_role_policy" "function" {
-  count = var.policy_json == null ? 0 : 1
+  for_each = var.policies
 
-  name   = "function"
+  name   = each.key
   role   = aws_iam_role.this.id
-  policy = var.policy_json
+  policy = each.value
 }
 
 # Created here rather than left to Lambda, so retention is set from the start and the role's log

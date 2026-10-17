@@ -37,7 +37,9 @@ resource "aws_apigatewayv2_route" "this" {
 resource "aws_lambda_permission" "this" {
   for_each = var.routes
 
-  statement_id  = "AllowInvokeFrom${replace(replace(replace(each.key, " ", ""), "/", ""), "{", "")}"
+  # Statement ids allow only alphanumerics, underscores and dashes, so everything else in a route
+  # key ("GET /products/{productId}") is stripped.
+  statement_id  = "AllowInvoke${replace(each.key, "/[^a-zA-Z0-9]/", "")}"
   action        = "lambda:InvokeFunction"
   function_name = each.value.function_name
   principal     = "apigateway.amazonaws.com"

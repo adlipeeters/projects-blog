@@ -20,6 +20,20 @@ export type Product = {
   readonly isDrop: boolean;
 };
 
+/**
+ * What a category listing can show.
+ *
+ * Deliberately smaller than Product: `category-price-index` projects only name, fromPriceCents and
+ * imageUrl, so a listing cannot promise a description or a category without a second read per
+ * product. AP2 returns these; AP1 returns the full Product.
+ */
+export type ProductSummary = {
+  readonly productId: ProductId;
+  readonly name: string;
+  readonly fromPrice: Money;
+  readonly imageUrl: string;
+};
+
 export type Variant = {
   readonly productId: ProductId;
   readonly sku: Sku;

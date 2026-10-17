@@ -45,6 +45,9 @@ pnpm lint
 pnpm test:unit
 pnpm test:integration   # DynamoDB Local in Testcontainers, needs Docker
 pnpm build              # esbuild bundle per handler
+pnpm deploy             # build, then terraform apply
+pnpm seed               # 200 products plus one drop, into CATALOG_TABLE
+pnpm reset-catalog      # clear seeded catalog items (between load runs)
 pnpm tf:plan            # terraform plan in infra/envs/dev
 ```
 
@@ -53,7 +56,7 @@ pnpm tf:plan            # terraform plan in infra/envs/dev
 | #   | Milestone                                                                             | Status  |
 | --- | ------------------------------------------------------------------------------------- | ------- |
 | M0  | Scaffold: repo layout, `schema/tables.json`, Terraform backend, lambda-fn module, API | done    |
-| M1  | Catalog table (provisioned + auto scaling), AP1, AP2, seed script                     | pending |
+| M1  | Catalog table (provisioned + auto scaling), AP1, AP2, seed script                     | done    |
 | M2  | Commerce table with LSI, Streams, TTL, PITR; AP5 to AP11 with plain checkout          | pending |
 | M3  | `fulfillment-index` and warehouse queue (AP12)                                        | pending |
 | M4  | Streams to `outbox-publisher` to EventBridge; `sales-aggregator` + AP14               | pending |

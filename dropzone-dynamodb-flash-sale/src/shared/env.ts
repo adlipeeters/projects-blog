@@ -35,3 +35,22 @@ export function env(): Env {
 export function resetEnvCache(): void {
   cached = undefined;
 }
+
+/**
+ * A variable only some functions need, such as a table name.
+ *
+ * Kept out of the schema above because every handler parses that one, and a handler with no table
+ * access must not fail because a table name it never uses is absent. Terraform passes each function
+ * exactly the names its IAM policy allows it to touch.
+ */
+export function requiredEnv(name: string): string {
+  const value = process.env[name];
+  if (value === undefined || value.length === 0) {
+    throw new Error(`Missing required environment variable ${name}`);
+  }
+  return value;
+}
+
+export const catalogTable = (): string => requiredEnv('CATALOG_TABLE');
+export const commerceTable = (): string => requiredEnv('COMMERCE_TABLE');
+export const cartsTable = (): string => requiredEnv('CARTS_TABLE');

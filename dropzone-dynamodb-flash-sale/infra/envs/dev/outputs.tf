@@ -15,3 +15,11 @@ output "health_function_name" {
 output "api_access_log_group" {
   value = module.api.access_log_group_name
 }
+
+output "catalog_table_name" {
+  value = module.tables.catalog_table_name
+}
+
+output "catalog_index_names" {
+  value = module.tables.catalog_index_names
+}

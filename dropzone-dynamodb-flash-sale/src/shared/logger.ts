@@ -18,6 +18,7 @@ export type LogContext = {
   readonly orderId?: string;
   readonly holdId?: string;
   readonly cartId?: string;
+  readonly productId?: string;
   readonly sku?: string;
 };
 

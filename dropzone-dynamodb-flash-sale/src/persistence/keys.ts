@@ -22,6 +22,21 @@ export type ItemKey = {
   readonly SK: string;
 };
 
+/**
+ * The key attribute names, exported so that mappers and tests never spell them out.
+ * ESLint forbids these literals everywhere except this file.
+ */
+export const KEY_ATTRIBUTES = ['PK', 'SK'] as const;
+
+/** For KeyConditionExpression attribute names. Every table in this project uses the same two. */
+export const [PARTITION_ATTRIBUTE, SORT_ATTRIBUTE] = KEY_ATTRIBUTES;
+
+/** Reads the partition key off a raw item, so callers never name the attribute. */
+export const partitionKeyOf = (raw: Record<string, unknown>): unknown => raw[PARTITION_ATTRIBUTE];
+
+/** Reads the sort key off a raw item. */
+export const sortKeyOf = (raw: Record<string, unknown>): unknown => raw[SORT_ATTRIBUTE];
+
 /** Shard counts live in schema/tables.json so readers and Terraform cannot disagree. */
 export const SHARD_COUNTS = {
   fulfillment: indexShards('commerce', 'fulfillment-index'),
@@ -29,11 +44,27 @@ export const SHARD_COUNTS = {
   holds: indexShards('commerce', 'holds-index'),
 } as const;
 
-function indexShards(table: keyof typeof tables.tables, indexName: string): number {
+function findIndex(table: keyof typeof tables.tables, indexName: string) {
   const index = tables.tables[table].globalSecondaryIndexes.find((i) => i.name === indexName);
   if (!index) throw new Error(`index ${indexName} is missing from schema/tables.json`);
-  return index.shards;
+  return index;
 }
+
+function indexShards(table: keyof typeof tables.tables, indexName: string): number {
+  return findIndex(table, indexName).shards;
+}
+
+/**
+ * AP2's index: its name from schema/tables.json, its attribute names from here.
+ *
+ * A repository needs both to write a KeyConditionExpression, and neither should be a literal
+ * anywhere else.
+ */
+export const CATEGORY_PRICE_INDEX = {
+  name: findIndex('catalog', 'category-price-index').name,
+  partitionAttribute: 'GSI1PK',
+  sortAttribute: 'GSI1SK',
+} as const;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -106,6 +137,22 @@ export const variantKey = (productId: string, sku: string): ItemKey => ({
 /** AP1: the prefix that selects variants only. */
 export const variantSkPrefix = (): string => 'VARIANT#';
 
+const PRODUCT_PREFIX = 'PRODUCT#';
+
+/**
+ * The product id back out of a partition key.
+ *
+ * The `category-price-index` projection is deliberately small and does not include `productId`,
+ * but index entries always carry the base table's keys, and the id is already in there. Reading it
+ * back beats paying to store it twice.
+ */
+export function productIdFromPartition(partitionKey: string): string {
+  if (!partitionKey.startsWith(PRODUCT_PREFIX)) {
+    throw new Error(`Not a product partition key: ${partitionKey}`);
+  }
+  return partitionKey.slice(PRODUCT_PREFIX.length);
+}
+
 /**
  * AP2: `GSI1PK = CATEGORY#<categoryId>` on the catalog table.
  *
@@ -114,14 +161,36 @@ export const variantSkPrefix = (): string => 'VARIANT#';
  */
 export const categoryIndexPk = (categoryId: string): string => `CATEGORY#${categoryId}`;
 
+/**
+ * AP2: the index attributes a product META item carries.
+ *
+ * Returned as a complete attribute map so a mapper never names `GSI1PK` or `GSI1SK` itself. A
+ * variant gets no such attributes, which is what makes the index sparse.
+ */
+export const categoryIndexAttributes = (
+  categoryId: string,
+  fromPriceCents: number,
+  productId: string,
+): { readonly GSI1PK: string; readonly GSI1SK: string } => ({
+  GSI1PK: categoryIndexPk(categoryId),
+  GSI1SK: categoryPriceIndexSk(fromPriceCents, productId),
+});
+
 /** AP2: `GSI1SK = PRICE#<priceCents, 10 digits>#<productId>`, cheapest first. */
 export const categoryPriceIndexSk = (priceCents: number, productId: string): string =>
   `PRICE#${pad(priceCents)}#${productId}`;
 
+/**
+ * The largest value a 10-digit padded sort key can hold: 9,999,999,999 cents, about 100 million
+ * euros. An open-ended price range stops here rather than at Number.MAX_SAFE_INTEGER, which has 16
+ * digits and would not pad.
+ */
+export const MAX_PADDED_CENTS = 9_999_999_999;
+
 /** AP2: the two bounds of a BETWEEN on the price index. */
 export const categoryPriceBounds = (
-  minPriceCents: number,
-  maxPriceCents: number,
+  minPriceCents = 0,
+  maxPriceCents: number = MAX_PADDED_CENTS,
 ): { readonly from: string; readonly to: string } => {
   if (maxPriceCents < minPriceCents) {
     throw new Error('Price range is inverted');
