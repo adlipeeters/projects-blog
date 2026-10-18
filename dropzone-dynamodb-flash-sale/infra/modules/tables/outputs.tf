@@ -38,3 +38,16 @@ output "commerce_lsi_arns" {
     index.name => "${aws_dynamodb_table.commerce.arn}/index/${index.name}"
   }
 }
+
+output "carts_table_name" {
+  value = aws_dynamodb_table.carts.name
+}
+
+output "carts_table_arn" {
+  value = aws_dynamodb_table.carts.arn
+}
+
+output "carts_stream_arn" {
+  description = "For the per-Region cart-abandonment consumers in M5."
+  value       = aws_dynamodb_table.carts.stream_arn
+}

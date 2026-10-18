@@ -31,3 +31,7 @@ output "commerce_table_name" {
 output "commerce_stream_arn" {
   value = module.tables.commerce_stream_arn
 }
+
+output "carts_table_name" {
+  value = module.tables.carts_table_name
+}

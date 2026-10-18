@@ -121,7 +121,7 @@
       "globalSecondaryIndexes": [],
       "stream": { "enabled": true, "viewType": "NEW_AND_OLD_IMAGES" },
       "ttlAttribute": "ttl",
-      "replicas": [{ "regionName": "us-east-1" }],
+      "replicas": [],
       "pointInTimeRecovery": true,
       "deletionProtection": true,
       "contributorInsights": false,
