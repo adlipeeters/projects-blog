@@ -21,3 +21,7 @@ docs/SPEC.md
 !.env.example
 
 .DS_Store
+
+# The cutoff timestamp of the last stock seeding, written by `make seed-a` / `make seed-b`.
+.last-seed
+.last-seed.log

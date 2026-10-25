@@ -25,6 +25,8 @@
     "stock-report": "tsx scripts/stock-report.ts",
     "reset-catalog": "tsx scripts/reset-catalog.ts",
     "verify-stock": "tsx scripts/verify-stock.ts",
+    "load": "POWERTOOLS_METRICS_DISABLED=true POWERTOOLS_LOG_LEVEL=ERROR tsx test/load/drop.ts",
+    "load:image": "docker build --platform linux/arm64 -f test/load/Dockerfile -t dropzone-load .",
     "backfill": "tsx scripts/backfill-status-index.ts",
     "tf:fmt": "terraform fmt -check -recursive infra",
     "tf:validate": "terraform -chdir=infra/envs/dev validate",

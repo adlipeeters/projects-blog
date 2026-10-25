@@ -11,12 +11,21 @@ import type { Sku } from '../../domain/ids.js';
 import type { StockBucket } from '../../domain/product.js';
 import { totalAvailable } from '../../domain/product.js';
 import { commerceTable } from '../../shared/env.js';
+import { NotFoundError } from '../../shared/errors.js';
 import { batchWriteAll } from '../batch.js';
 import { documentClient } from '../client.js';
 import { stockBucketKeys } from '../keys.js';
 import { stockBucketFromItem, stockBucketToItem } from '../mappers/stock.js';
+import { catalogRepository } from './catalog.js';
 
-export function stockRepository() {
+/** AP13's answer: the sum, and the buckets it came from. */
+export type SkuStock = {
+  readonly sku: Sku;
+  readonly available: number;
+  readonly buckets: readonly StockBucket[];
+};
+
+export function stockRepository(catalog = catalogRepository()) {
   const table = (): string => commerceTable();
 
   return {
@@ -76,6 +85,30 @@ export function stockRepository() {
     /** AP13's answer: the sum across buckets. */
     async available(sku: Sku, bucketCount: number): Promise<number> {
       return totalAvailable(await this.readBuckets(sku, bucketCount));
+    },
+
+    /**
+     * AP13 for a sku the caller knows nothing else about.
+     *
+     * The bucket count lives on the variant, so this is a catalog lookup followed by the batch
+     * read. Reading the count rather than assuming one is what lets the same route answer for a
+     * normal variant with one bucket and a drop with ten.
+     */
+    async forSku(sku: Sku): Promise<SkuStock> {
+      const pointers = await catalog.resolveSkus([sku]);
+      const pointer = pointers.get(sku);
+      if (pointer === undefined) {
+        throw new NotFoundError(`No such sku: ${sku}`);
+      }
+
+      const variants = await catalog.loadVariants([pointer]);
+      const variant = variants.get(sku);
+      if (variant === undefined) {
+        throw new NotFoundError(`No such sku: ${sku}`);
+      }
+
+      const buckets = await this.readBuckets(sku, variant.stockBuckets);
+      return { sku, available: totalAvailable(buckets), buckets };
     },
   };
 }

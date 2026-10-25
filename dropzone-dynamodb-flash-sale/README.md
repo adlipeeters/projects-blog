@@ -35,37 +35,45 @@ test/               unit, integration, e2e, load
 
 ## Commands
 
-Infrastructure is applied from a laptop. There is no CI, so the checks below are the gate and run
+`make` on its own lists everything, grouped. Each target is a thin wrapper over the `pnpm` script
+or AWS command underneath, and reads the table names out of `terraform output` so none of them has
+to be typed.
+
+Infrastructure is applied from a laptop. There is no CI, so `make check` is the gate and runs
 before a commit.
 
 ```bash
-pnpm install
-pnpm typecheck
-pnpm lint
-pnpm test:unit
-pnpm test:integration   # DynamoDB Local in Testcontainers, needs Docker
-pnpm build              # esbuild bundle per handler
-pnpm deploy             # build, then terraform apply
-pnpm seed               # 200 products plus one drop, into CATALOG_TABLE
-pnpm seed-stock         # stock for one sku, split across its buckets
-pnpm stock-report       # a sku's buckets and their sum
-pnpm reset-catalog      # clear seeded catalog items (between load runs)
-pnpm tf:plan            # terraform plan in infra/envs/dev
+make                    # the list
+make check              # types, lint, format, unit tests, terraform validate
+make test               # both test suites (integration needs Docker)
+make deploy             # build, then terraform apply
+make seed               # 200 products plus one drop
+```
+
+The flash sale (spec section 9) is five targets. `make seed-a` and `make seed-b` are the only
+difference between the two runs, and each records its cutoff so `make verify` needs no arguments:
+
+```bash
+make push               # build the arm64 harness image and push it to ECR
+make run-a              # seed one bucket, then start the Fargate run
+make result             # the run's summary line
+make verify             # available + in orders + in HELD holds == seeded
+make run-b              # the same 5,000 units across ten buckets
 ```
 
 ## Milestones
 
-| #   | Milestone                                                                             | Status  |
-| --- | ------------------------------------------------------------------------------------- | ------- |
-| M0  | Scaffold: repo layout, `schema/tables.json`, Terraform backend, lambda-fn module, API | done    |
-| M1  | Catalog table (provisioned + auto scaling), AP1, AP2, seed script                     | done    |
-| M2  | Commerce table with LSI, Streams, TTL, PITR; AP5 to AP11 with plain checkout          | done    |
-| M3  | `fulfillment-index` and warehouse queue (AP12)                                        | done    |
-| M4  | Streams to `outbox-publisher` to EventBridge; `sales-aggregator` + AP14               | next    |
-| M5  | Carts global table, AP3, AP4, `cart-abandonment` in both regions                      | pending |
-| M6  | Flash sale: stock buckets, holds, sweeper, load tests A and B                         | pending |
-| M7  | Live migration: `status-date-index` + backfill + AP16                                 | pending |
-| M8  | Hardening: alarms, dashboard, cost write-up per table                                 | pending |
+| #   | Milestone                                                                             | Status      |
+| --- | ------------------------------------------------------------------------------------- | ----------- |
+| M0  | Scaffold: repo layout, `schema/tables.json`, Terraform backend, lambda-fn module, API | done        |
+| M1  | Catalog table (provisioned + auto scaling), AP1, AP2, seed script                     | done        |
+| M2  | Commerce table with LSI, Streams, TTL, PITR; AP5 to AP11 with plain checkout          | done        |
+| M3  | `fulfillment-index` and warehouse queue (AP12)                                        | done        |
+| M4  | Streams to `outbox-publisher` to EventBridge; `sales-aggregator` + AP14               | pending     |
+| M5  | Carts global table, AP3, AP4, `cart-abandonment` in both regions                      | pending     |
+| M6  | Flash sale: stock buckets, holds, sweeper, load runs A and B                          | in progress |
+| M7  | Live migration: `status-date-index` + backfill + AP16                                 | pending     |
+| M8  | Hardening: alarms, dashboard, cost write-up per table                                 | pending     |
 
 ## Articles
 

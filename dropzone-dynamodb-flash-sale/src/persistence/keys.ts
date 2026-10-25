@@ -400,11 +400,66 @@ export const holdsIndexShards = (): readonly string[] =>
 /** AP15 sort key: `GSI3SK = <expiresAt ISO>#<holdId>`, so `GSI3SK < now` finds expired holds. */
 export const holdsIndexSk = (expiresAt: string, holdId: string): string => `${expiresAt}#${holdId}`;
 
+/**
+ * AP15: the index attributes a hold carries while it is still HELD.
+ *
+ * Gone the moment it is confirmed or released, which is what keeps the sweeper's index small: it
+ * contains open holds only, so a query for expired ones reads nothing it has to discard.
+ */
+export const holdsIndexAttributes = (
+  holdId: string,
+  expiresAt: string,
+): { readonly GSI3PK: string; readonly GSI3SK: string } => ({
+  GSI3PK: holdsIndexPk(holdId),
+  GSI3SK: holdsIndexSk(expiresAt, holdId),
+});
+
+/** AP15's index: its name from schema/tables.json, its attribute names from here. */
+export const HOLDS_INDEX = {
+  name: findIndex('commerce', 'holds-index').name,
+  partitionAttribute: 'GSI3PK',
+  sortAttribute: 'GSI3SK',
+} as const;
+
+/** The attribute names the confirm and release updates REMOVE to take a hold out of the index. */
+export const HOLDS_INDEX_ATTRIBUTES = {
+  partition: 'GSI3PK',
+  sort: 'GSI3SK',
+} as const;
+
+/**
+ * The two values packed into the holds index's sort key.
+ *
+ * The projection carries `customerId` and nothing else, because the hold id and its expiry are
+ * already in the sort key. The sweeper needs all three and reads two of them from here.
+ */
+export function parseHoldsIndexSk(sortKey: string): {
+  readonly expiresAt: string;
+  readonly holdId: string;
+} {
+  const separator = sortKey.indexOf('#');
+  if (separator === -1) {
+    throw new Error(`Not a holds index sort key: ${sortKey}`);
+  }
+  return {
+    expiresAt: sortKey.slice(0, separator),
+    holdId: sortKey.slice(separator + 1),
+  };
+}
+
 /** Idempotency key: `IDEMPOTENCY#<customerId>#<key>` / `IDEMPOTENCY` */
 export const idempotencyKey = (customerId: string, key: string): ItemKey => ({
   PK: `IDEMPOTENCY#${customerId}#${key}`,
   SK: 'IDEMPOTENCY',
 });
+
+/**
+ * Confirming a hold is idempotent on the hold itself (AP15).
+ *
+ * The hold id is the natural key: a client that retries a confirm has nothing new to send, and
+ * requiring an Idempotency-Key header for a second call about the same hold would be ceremony.
+ */
+export const holdConfirmIdempotencyToken = (holdId: string): string => `CONFIRM#${holdId}`;
 
 /** Sales aggregate: `SALES#<categoryId>#<yyyy-mm-dd>` / `SKU#<sku>` */
 export const salesAggregateKey = (categoryId: string, date: string, sku: string): ItemKey => ({

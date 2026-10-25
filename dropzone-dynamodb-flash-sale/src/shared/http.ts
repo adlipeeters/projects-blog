@@ -15,6 +15,8 @@ import type {
   Context,
 } from 'aws-lambda';
 
+import type { CustomerId } from '../domain/ids.js';
+import { customerId as parseCustomerId } from '../domain/ids.js';
 import { addLogContext, clearLogContext, logger } from './logger.js';
 import { metrics } from './metrics.js';
 import { ValidationError, isAppError, toErrorResponse } from './errors.js';
@@ -48,6 +50,20 @@ export function jsonBody(event: APIGatewayProxyEventV2): unknown {
   } catch {
     throw new ValidationError('Body is not valid JSON');
   }
+}
+
+/**
+ * The caller's id, from the trusted `x-customer-id` header.
+ *
+ * Auth is a documented non-goal (spec section 1): behind API Gateway this header is set by the
+ * edge, and every route that writes on a customer's behalf needs it, so it is read in one place.
+ */
+export function requireCustomerId(headers: Record<string, string | undefined>): CustomerId {
+  const raw = headers['x-customer-id'];
+  if (raw === undefined || raw.length === 0) {
+    throw new ValidationError('An x-customer-id header is required');
+  }
+  return parseCustomerId(raw);
 }
 
 export type RouteHandler = (event: APIGatewayProxyEventV2, context: Context) => Promise<HttpResult>;

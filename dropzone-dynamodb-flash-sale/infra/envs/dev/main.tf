@@ -262,6 +262,216 @@ module "warehouse_queue" {
   policies        = { commerce-index = data.aws_iam_policy_document.warehouse_queue.json }
 }
 
+# AP13: the stock buckets of one sku, summed. Read-only on both tables: the bucket count comes
+# from the catalog variant, the counters from commerce.
+data "aws_iam_policy_document" "get_stock" {
+  statement {
+    sid       = "ReadStockBuckets"
+    effect    = "Allow"
+    actions   = ["dynamodb:BatchGetItem"]
+    resources = [module.tables.commerce_table_arn]
+  }
+
+  statement {
+    sid       = "ReadVariantBucketCount"
+    effect    = "Allow"
+    actions   = ["dynamodb:BatchGetItem"]
+    resources = [module.tables.catalog_table_arn]
+  }
+}
+
+module "get_stock" {
+  source = "../../modules/lambda-fn"
+
+  name        = "get-stock"
+  name_prefix = local.name_prefix
+  description = "AP13: available units of a sku, summed across its buckets."
+  dist_dir    = "${local.dist_handlers}/get-stock"
+
+  stage           = var.env
+  service_version = var.service_version
+
+  environment = {
+    COMMERCE_TABLE = module.tables.commerce_table_name
+    CATALOG_TABLE  = module.tables.catalog_table_name
+  }
+
+  policies = { stock = data.aws_iam_policy_document.get_stock.json }
+}
+
+# AP15, create. The same writes checkout performs, minus the order: the idempotency item, the
+# conditional bucket decrements, and the hold itself.
+data "aws_iam_policy_document" "create_hold" {
+  statement {
+    sid    = "WriteHoldAndTakeStock"
+    effect = "Allow"
+
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:GetItem",
+    ]
+
+    resources = [module.tables.commerce_table_arn]
+  }
+
+  statement {
+    sid    = "ReadCatalogForPricing"
+    effect = "Allow"
+
+    # Read-only on the catalog: a hold snapshots prices from it and must never write to it.
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:BatchGetItem",
+    ]
+
+    resources = [module.tables.catalog_table_arn]
+  }
+}
+
+module "create_hold" {
+  source = "../../modules/lambda-fn"
+
+  name        = "create-hold"
+  name_prefix = local.name_prefix
+  description = "AP15: hold stock for ten minutes, in one transaction."
+  dist_dir    = "${local.dist_handlers}/create-hold"
+
+  stage           = var.env
+  service_version = var.service_version
+
+  environment = {
+    COMMERCE_TABLE = module.tables.commerce_table_name
+    CATALOG_TABLE  = module.tables.catalog_table_name
+  }
+
+  policies             = { create-hold = data.aws_iam_policy_document.create_hold.json }
+  reserved_concurrency = var.hold_reserved_concurrency
+}
+
+# AP15, confirm. No stock actions and no catalog access at all: the units were taken when the hold
+# was created, and the prices come from the hold's own snapshot.
+data "aws_iam_policy_document" "confirm_hold" {
+  statement {
+    sid    = "ConfirmHoldAndWriteOrder"
+    effect = "Allow"
+
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+    ]
+
+    resources = [module.tables.commerce_table_arn]
+  }
+}
+
+module "confirm_hold" {
+  source = "../../modules/lambda-fn"
+
+  name        = "confirm-hold"
+  name_prefix = local.name_prefix
+  description = "AP15: turn a hold into an order, in one transaction."
+  dist_dir    = "${local.dist_handlers}/confirm-hold"
+
+  stage           = var.env
+  service_version = var.service_version
+  environment     = { COMMERCE_TABLE = module.tables.commerce_table_name }
+
+  policies             = { confirm-hold = data.aws_iam_policy_document.confirm_hold.json }
+  reserved_concurrency = var.hold_reserved_concurrency
+}
+
+# AP15, release. Reads the hold for its allocations, then closes it and credits the buckets.
+data "aws_iam_policy_document" "release_hold" {
+  statement {
+    sid       = "ReleaseHoldAndReturnStock"
+    effect    = "Allow"
+    actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+    resources = [module.tables.commerce_table_arn]
+  }
+}
+
+module "release_hold" {
+  source = "../../modules/lambda-fn"
+
+  name        = "release-hold"
+  name_prefix = local.name_prefix
+  description = "AP15: close a hold and return its units to their buckets."
+  dist_dir    = "${local.dist_handlers}/release-hold"
+
+  stage           = var.env
+  service_version = var.service_version
+  environment     = { COMMERCE_TABLE = module.tables.commerce_table_name }
+  policies        = { release-hold = data.aws_iam_policy_document.release_hold.json }
+}
+
+# AP15, the sweeper. Queries the holds index, then releases through the table. The index is listed
+# separately because permission on a table does not extend to its indexes.
+data "aws_iam_policy_document" "hold_sweeper" {
+  statement {
+    sid       = "QueryExpiredHolds"
+    effect    = "Allow"
+    actions   = ["dynamodb:Query"]
+    resources = [module.tables.commerce_index_arns["holds-index"]]
+  }
+
+  statement {
+    sid       = "ReleaseExpiredHolds"
+    effect    = "Allow"
+    actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+    resources = [module.tables.commerce_table_arn]
+  }
+}
+
+module "hold_sweeper" {
+  source = "../../modules/lambda-fn"
+
+  name        = "hold-sweeper"
+  name_prefix = local.name_prefix
+  description = "AP15: release expired holds every minute. The timer TTL cannot be."
+  dist_dir    = "${local.dist_handlers}/hold-sweeper"
+
+  stage           = var.env
+  service_version = var.service_version
+  environment     = { COMMERCE_TABLE = module.tables.commerce_table_name }
+  policies        = { hold-sweeper = data.aws_iam_policy_document.hold_sweeper.json }
+
+  # Up to a hundred releases per run, each a transaction. Thirty seconds is generous and still well
+  # inside the minute before the next run.
+  timeout = 30
+}
+
+# ---------------------------------------------------------------------------
+# Schedules (spec section 7)
+# ---------------------------------------------------------------------------
+
+module "events" {
+  source = "../../modules/events"
+
+  name_prefix          = local.name_prefix
+  sweeper_function_arn = module.hold_sweeper.function_arn
+  enabled              = var.hold_sweeper_enabled
+}
+
+# ---------------------------------------------------------------------------
+# Load harness (spec section 9)
+# ---------------------------------------------------------------------------
+
+module "loadtest" {
+  source = "../../modules/loadtest"
+
+  name_prefix         = local.name_prefix
+  commerce_table_arn  = module.tables.commerce_table_arn
+  commerce_table_name = module.tables.commerce_table_name
+  catalog_table_arn   = module.tables.catalog_table_arn
+  catalog_table_name  = module.tables.catalog_table_name
+
+  cpu         = var.loadtest_cpu
+  memory      = var.loadtest_memory
+  max_sockets = var.loadtest_max_sockets
+}
+
 # ---------------------------------------------------------------------------
 # Routes (spec section 7)
 # ---------------------------------------------------------------------------
@@ -307,6 +517,22 @@ module "api" {
     "GET /warehouse/queue" = {
       function_name = module.warehouse_queue.function_name
       invoke_arn    = module.warehouse_queue.invoke_arn
+    }
+    "GET /skus/{sku}/stock" = {
+      function_name = module.get_stock.function_name
+      invoke_arn    = module.get_stock.invoke_arn
+    }
+    "POST /checkout/holds" = {
+      function_name = module.create_hold.function_name
+      invoke_arn    = module.create_hold.invoke_arn
+    }
+    "POST /checkout/holds/{holdId}/confirm" = {
+      function_name = module.confirm_hold.function_name
+      invoke_arn    = module.confirm_hold.invoke_arn
+    }
+    "DELETE /checkout/holds/{holdId}" = {
+      function_name = module.release_hold.function_name
+      invoke_arn    = module.release_hold.invoke_arn
     }
   }
 

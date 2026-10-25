@@ -35,3 +35,29 @@ output "commerce_stream_arn" {
 output "carts_table_name" {
   value = module.tables.carts_table_name
 }
+
+output "hold_sweeper_function_name" {
+  value = module.hold_sweeper.function_name
+}
+
+output "hold_sweeper_schedule_name" {
+  value = module.events.hold_sweeper_schedule_name
+}
+
+output "loadtest_ecr_repository_url" {
+  description = "Push the harness image here before a load run."
+  value       = module.loadtest.ecr_repository_url
+}
+
+output "loadtest_run_task_command" {
+  value = module.loadtest.run_task_command
+}
+
+output "loadtest_network_configuration" {
+  description = "The --network-configuration for `aws ecs run-task`."
+  value       = module.loadtest.network_configuration
+}
+
+output "loadtest_log_group" {
+  value = module.loadtest.log_group_name
+}

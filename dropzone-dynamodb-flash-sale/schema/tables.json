@@ -37,7 +37,7 @@
       "deletionProtection": true,
       "contributorInsights": false,
       "autoscaling": {
-        "read": { "min": 5, "max": 100 },
+        "read": { "min": 5, "max": 4000 },
         "write": { "min": 5, "max": 25 },
         "targetUtilizationPercent": 70
       }
@@ -104,8 +104,8 @@
       "pointInTimeRecovery": true,
       "deletionProtection": true,
       "contributorInsights": true,
-      "warmThroughput": null,
-      "onDemandThroughput": { "maxReadRequestUnits": 20000, "maxWriteRequestUnits": 8000 },
+      "warmThroughput": { "readUnitsPerSecond": 12000, "writeUnitsPerSecond": 6000 },
+      "onDemandThroughput": { "maxReadRequestUnits": 20000, "maxWriteRequestUnits": 20000 },
       "autoscaling": null
     },
     "carts": {

@@ -6,11 +6,12 @@
  * invocation but tests set it after importing this module.
  */
 
-import { BatchGetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { BatchGetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 
 import type { CategoryId, ProductId, Sku } from '../../domain/ids.js';
 import type { Product, ProductSummary, Variant } from '../../domain/product.js';
 import { catalogTable } from '../../shared/env.js';
+import { NotFoundError } from '../../shared/errors.js';
 import { decodeCursor, encodeCursor, pageSize, type Page } from '../../shared/pagination.js';
 import { batchWriteAll } from '../batch.js';
 import { documentClient } from '../client.js';
@@ -137,6 +138,38 @@ export function catalogRepository() {
       }
 
       return resolved;
+    },
+
+    /**
+     * Sets a variant's bucket count, which is the one dial the two load runs turn (spec section 9).
+     *
+     * It belongs on the variant and nowhere else, because that is where checkout and create-hold
+     * read it: `priceLines` puts it on the priced line and `bucketOrder` rotates over it. Splitting
+     * the stock items a different way without changing this would leave every request walking
+     * buckets that were never seeded.
+     */
+    async setStockBuckets(sku: Sku, stockBuckets: number): Promise<void> {
+      if (!Number.isInteger(stockBuckets) || stockBuckets < 1) {
+        throw new Error(`Bucket count must be a positive integer, got ${String(stockBuckets)}`);
+      }
+
+      const pointers = await this.resolveSkus([sku]);
+      const pointer = pointers.get(sku);
+      if (pointer === undefined) {
+        throw new NotFoundError(`No such sku: ${sku}`);
+      }
+
+      await documentClient().send(
+        new UpdateCommand({
+          TableName: table(),
+          Key: variantKey(pointer.productId, sku),
+          UpdateExpression: 'SET stockBuckets = :buckets',
+          // An update with no condition would happily create the item from nothing, and a variant
+          // that exists only as a bucket count is worse than a missing one.
+          ConditionExpression: `attribute_exists(${PARTITION_ATTRIBUTE})`,
+          ExpressionAttributeValues: { ':buckets': stockBuckets },
+        }),
+      );
     },
 
     /** The variants themselves: the price to snapshot and the bucket count to allocate from. */

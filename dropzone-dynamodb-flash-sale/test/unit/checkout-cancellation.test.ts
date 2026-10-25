@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { sku } from '../../src/domain/ids.js';
 import type { Allocation } from '../../src/domain/order.js';
-import { classifyCancellation } from '../../src/persistence/repositories/orders.js';
+import { classifyCancellation } from '../../src/persistence/allocation.js';
 
 /**
  * DynamoDB reports one cancellation reason per transaction item, in the order the items were sent,

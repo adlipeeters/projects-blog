@@ -12,25 +12,14 @@ import {
   parseIdempotencyKey,
   toOrderPlacedResponse,
 } from '../../api/schemas/checkout.js';
-import { customerId as parseCustomerId } from '../../domain/ids.js';
 import { orderRepository } from '../../persistence/repositories/orders.js';
-import { ValidationError } from '../../shared/errors.js';
-import { httpRoute, jsonBody, ok, created } from '../../shared/http.js';
+import { httpRoute, jsonBody, ok, created, requireCustomerId } from '../../shared/http.js';
 import { addLogContext } from '../../shared/logger.js';
 
 const orders = orderRepository();
 
-/** Auth is a trusted header behind API Gateway, which is a documented non-goal (spec section 1). */
-const customerFrom = (headers: Record<string, string | undefined>) => {
-  const raw = headers['x-customer-id'];
-  if (raw === undefined || raw.length === 0) {
-    throw new ValidationError('An x-customer-id header is required');
-  }
-  return parseCustomerId(raw);
-};
-
 export const handler = httpRoute('checkout', async (event) => {
-  const customerId = customerFrom(event.headers);
+  const customerId = requireCustomerId(event.headers);
   const idempotencyKey = parseIdempotencyKey(event.headers);
   const body = parseCheckoutBody(jsonBody(event));
 

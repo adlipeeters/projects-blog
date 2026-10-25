@@ -1,10 +1,14 @@
 /**
  * Prints a sku's buckets and their sum.
  *
- *   COMMERCE_TABLE=dropzone-dev-commerce pnpm stock-report -- --sku DROP-TEE-M-BLK --buckets 10
+ *   COMMERCE_TABLE=dropzone-dev-commerce CATALOG_TABLE=dropzone-dev-catalog \
+ *   pnpm stock-report -- --sku DROP-TEE-M-BLK
  *
- * The full invariant check (available + sold + held = initial) arrives with the holds in M6, as
- * scripts/verify-stock.ts.
+ * The bucket count comes from the variant, the same way checkout and create-hold get it, rather
+ * than from a flag that can disagree with the catalog. A report that says ten buckets while the
+ * allocator is rotating over one is worse than no report.
+ *
+ * The full invariant check is scripts/verify-stock.ts.
  */
 
 import { sku as parseSku } from '../src/domain/ids.js';
@@ -17,15 +21,14 @@ const flag = (name: string): string | undefined => {
 };
 
 const sku = parseSku(flag('sku') ?? 'DROP-TEE-M-BLK');
-const buckets = Number(flag('buckets') ?? '10');
 
-const found = await stockRepository().readBuckets(sku, buckets);
-const total = found.reduce((sum, bucket) => sum + bucket.available, 0);
+const stock = await stockRepository().forSku(sku);
 
 console.log(`${commerceTable()} ${sku}`);
-for (const bucket of found) {
+for (const bucket of stock.buckets) {
   console.log(
     `  bucket ${String(bucket.bucket).padStart(2, '0')}: ${String(bucket.available)} available, version ${String(bucket.version)}`,
   );
 }
-console.log(`  total available: ${String(total)}`);
+console.log(`  total available: ${String(stock.available)}`);
+console.log(`  buckets the allocator rotates over: ${String(stock.buckets.length)}`);

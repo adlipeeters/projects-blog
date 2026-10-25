@@ -39,3 +39,15 @@ export const isExpired = (hold: Hold, now = new Date()): boolean =>
 /** Only a HELD hold that has not expired can still be confirmed. */
 export const isConfirmable = (hold: Hold, now = new Date()): boolean =>
   hold.status === 'HELD' && !isExpired(hold, now);
+
+/**
+ * One row of the sweeper's queue (AP15).
+ *
+ * Smaller than a Hold because the index projects only `customerId`: the hold id and its expiry are
+ * already packed into the sort key, and the sweeper needs nothing else to release it.
+ */
+export type HoldSweepEntry = {
+  readonly holdId: HoldId;
+  readonly customerId: CustomerId;
+  readonly expiresAt: string;
+};

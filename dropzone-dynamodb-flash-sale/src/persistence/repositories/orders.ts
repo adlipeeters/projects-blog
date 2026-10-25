@@ -22,14 +22,12 @@ import type { CustomerId, OrderId, Sku } from '../../domain/ids.js';
 import { newOrderId, orderId as parseOrderId } from '../../domain/ids.js';
 import type { Allocation, Order, OrderLine, OrderStatus } from '../../domain/order.js';
 import { canTransition, holdsStock, needsFulfillment, orderTotal } from '../../domain/order.js';
-import { bucketOrder } from '../../domain/stock.js';
 import { commerceTable } from '../../shared/env.js';
 import {
   ConflictError,
   IdempotencyMismatchError,
   InvalidTransitionError,
   NotFoundError,
-  SoldOutError,
   ValidationError,
 } from '../../shared/errors.js';
 import { logger } from '../../shared/logger.js';
@@ -37,6 +35,19 @@ import { MetricName, count } from '../../shared/metrics.js';
 import { decodeCursor, encodeCursor, pageSize, type Page } from '../../shared/pagination.js';
 import { requestHash } from '../../shared/request-hash.js';
 import { IDEMPOTENCY_TTL_HOURS, ttlInHours } from '../../shared/ttl.js';
+import {
+  MAX_CONFLICT_ATTEMPTS,
+  type RequestedLine,
+  cancellationReasons,
+  chooseBuckets,
+  classifyCancellation,
+  isTransactionCancelled,
+  jitteredBackoffMs,
+  priceLines,
+  rememberEmptyBuckets,
+  rotationBudget,
+  sleep,
+} from '../allocation.js';
 import { documentClient } from '../client.js';
 import {
   FULFILLMENT_INDEX_ATTRIBUTES,
@@ -62,10 +73,8 @@ import {
 } from '../mappers/order.js';
 import { catalogRepository } from './catalog.js';
 
-export type CheckoutLine = {
-  readonly sku: Sku;
-  readonly qty: number;
-};
+/** The shape a client sends. Pricing and bucket choice happen in allocation.ts. */
+export type CheckoutLine = RequestedLine;
 
 export type CheckoutRequest = {
   readonly customerId: CustomerId;
@@ -96,110 +105,6 @@ export type StatusChange = {
 
 /** Spec section 7: at most 20 lines, which keeps the transaction well under its 100-action limit. */
 export const MAX_CHECKOUT_LINES = 20;
-
-/** Spec section 7: three attempts in total for transaction conflicts. */
-const MAX_CONFLICT_ATTEMPTS = 3;
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-const jitteredBackoffMs = (attempt: number): number => 2 ** attempt * 25 * (0.5 + Math.random());
-
-type CancellationReason = { readonly Code?: string };
-
-const isTransactionCancelled = (error: unknown): boolean =>
-  error instanceof Error && error.name === 'TransactionCanceledException';
-
-/**
- * Cancellation reasons come back as one entry per transaction item, in the order the items were
- * sent. Reading them by position is the only way to know which condition failed, which is why the
- * positions are computed explicitly rather than assumed.
- */
-const cancellationReasons = (error: unknown): readonly CancellationReason[] =>
-  (error as { CancellationReasons?: CancellationReason[] }).CancellationReasons ?? [];
-
-const CONDITION_FAILED = 'ConditionalCheckFailed';
-const TRANSACTION_CONFLICT = 'TransactionConflict';
-
-/** Where each kind of item sits in the transaction, so a cancellation reason can be read by index. */
-const IDEMPOTENCY_POSITION = 0;
-const FIRST_STOCK_POSITION = 1;
-
-type PricedLine = {
-  readonly line: OrderLine;
-  readonly buckets: number;
-};
-
-/**
- * What a cancelled transaction means for this request.
- *
- * DynamoDB reports one reason per transaction item, in the order the items were sent, and says
- * nothing about which business rule that was. Turning positions into a verdict is the whole trick,
- * and keeping it in one function makes it testable and readable.
- */
-type Verdict =
-  | { readonly kind: 'replay' }
-  | { readonly kind: 'rotate'; readonly empty: readonly Allocation[] }
-  | { readonly kind: 'conflict' }
-  | { readonly kind: 'unexpected' };
-
-export function classifyCancellation(
-  reasons: readonly CancellationReason[],
-  allocations: readonly Allocation[],
-): Verdict {
-  if (reasons[IDEMPOTENCY_POSITION]?.Code === CONDITION_FAILED) {
-    return { kind: 'replay' };
-  }
-
-  const empty = allocations.filter(
-    (_, index) => reasons[index + FIRST_STOCK_POSITION]?.Code === CONDITION_FAILED,
-  );
-  if (empty.length > 0) {
-    return { kind: 'rotate', empty };
-  }
-
-  if (reasons.some((reason) => reason.Code === TRANSACTION_CONFLICT)) {
-    return { kind: 'conflict' };
-  }
-
-  return { kind: 'unexpected' };
-}
-
-/** One bucket per line: the first in this request's rotation that has not already refused it. */
-function chooseBuckets(
-  priced: readonly PricedLine[],
-  exhausted: ReadonlyMap<Sku, ReadonlySet<number>>,
-): Allocation[] {
-  return priced.map((entry) => {
-    const skipped = exhausted.get(entry.line.sku) ?? new Set<number>();
-    const bucket = bucketOrder(entry.buckets).find((candidate) => !skipped.has(candidate));
-
-    if (bucket === undefined) {
-      count(MetricName.CheckoutSoldOut);
-      throw new SoldOutError(entry.line.sku);
-    }
-
-    return { sku: entry.line.sku, bucket, qty: entry.line.qty };
-  });
-}
-
-/** Records the buckets that refused this request, and gives up on a sku once none are left. */
-function rememberEmptyBuckets(
-  empty: readonly Allocation[],
-  priced: readonly PricedLine[],
-  exhausted: Map<Sku, Set<number>>,
-): void {
-  for (const allocation of empty) {
-    const skipped = exhausted.get(allocation.sku) ?? new Set<number>();
-    skipped.add(allocation.bucket);
-    exhausted.set(allocation.sku, skipped);
-
-    const buckets = priced.find((entry) => entry.line.sku === allocation.sku)?.buckets ?? 1;
-    if (skipped.size >= buckets) {
-      count(MetricName.CheckoutSoldOut);
-      throw new SoldOutError(allocation.sku);
-    }
-  }
-}
 
 const draftOrder = (input: {
   readonly orderId: OrderId;
@@ -279,33 +184,6 @@ function checkoutItems(input: {
 export function orderRepository(catalog = catalogRepository()) {
   const commerce = (): string => commerceTable();
 
-  /** Prices and bucket counts come from the catalog, never from the client (spec section 7). */
-  async function priceLines(lines: readonly CheckoutLine[]): Promise<PricedLine[]> {
-    const skus = lines.map((line) => line.sku);
-    const pointers = await catalog.resolveSkus(skus);
-    const variants = await catalog.loadVariants([...pointers.values()]);
-
-    return lines.map((line) => {
-      const pointer = pointers.get(line.sku);
-      const variant = variants.get(line.sku);
-
-      if (pointer === undefined || variant === undefined) {
-        throw new NotFoundError(`No such sku: ${line.sku}`);
-      }
-
-      return {
-        line: {
-          sku: line.sku,
-          productId: pointer.productId,
-          categoryId: pointer.categoryId,
-          qty: line.qty,
-          unitPrice: variant.price,
-        },
-        buckets: variant.stockBuckets,
-      };
-    });
-  }
-
   return {
     /**
      * AP7. Returns the placed order, or the original one when this request was already handled.
@@ -320,7 +198,7 @@ export function orderRepository(catalog = catalogRepository()) {
         });
       }
 
-      const priced = await priceLines(request.lines);
+      const priced = await priceLines(catalog, request.lines);
       const lines = priced.map((entry) => entry.line);
 
       // Hashed from what the client asked for, not from what the server priced it at, so a retry
@@ -335,7 +213,7 @@ export function orderRepository(catalog = catalogRepository()) {
 
       const exhausted = new Map<Sku, Set<number>>();
       // An empty bucket is not contention, so rotations and conflict retries get separate budgets.
-      const rotations = priced.reduce((total, entry) => total + entry.buckets, 0);
+      const rotations = rotationBudget(priced);
       let conflicts = 0;
 
       for (let attempt = 0; attempt < MAX_CONFLICT_ATTEMPTS + rotations; attempt += 1) {
@@ -420,7 +298,7 @@ export function orderRepository(catalog = catalogRepository()) {
         );
       }
 
-      const order = await this.getOrder(request.customerId, parseOrderId(record.orderId));
+      const order = await this.getOrder(request.customerId, parseOrderId(record.entityId));
       if (order === null) {
         throw new ConflictError('The original order could not be read, please retry');
       }

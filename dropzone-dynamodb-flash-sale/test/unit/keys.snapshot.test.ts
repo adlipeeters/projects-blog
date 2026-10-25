@@ -44,9 +44,12 @@ describe('key formats (spec section 6)', () => {
       PK: 'CUSTOMER#01J0CUST',
       SK: 'HOLD#01J0HOLD',
     });
+    expect(keys.holdsIndexPk('01J0HOLD')).toBe('HOLDS#1');
+    expect(keys.holdsIndexShards()).toEqual(['HOLDS#0', 'HOLDS#1', 'HOLDS#2', 'HOLDS#3']);
     expect(keys.holdsIndexSk('2026-10-15T12:00:00.000Z', '01J0HOLD')).toBe(
       '2026-10-15T12:00:00.000Z#01J0HOLD',
     );
+    expect(keys.holdConfirmIdempotencyToken('01J0HOLD')).toBe('CONFIRM#01J0HOLD');
     expect(keys.idempotencyKey('01J0CUST', 'abc-123')).toEqual({
       PK: 'IDEMPOTENCY#01J0CUST#abc-123',
       SK: 'IDEMPOTENCY',

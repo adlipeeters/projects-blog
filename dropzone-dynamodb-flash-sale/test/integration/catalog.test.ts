@@ -92,6 +92,53 @@ describe('AP1: get a product with all its variants', () => {
   });
 });
 
+/**
+ * The one dial the two load runs turn (spec section 9).
+ *
+ * It lives on the variant because that is where checkout and create-hold read it. Splitting the
+ * stock items a different way without moving this leaves every request rotating over buckets that
+ * were never seeded, which is a different experiment from the one the article claims to run.
+ */
+describe('stock bucket count', () => {
+  // Its own category, so the counts the AP2 listings assert on stay untouched.
+  const BUCKETS = categoryId('bucket-tees');
+
+  const aBucketVariant = async (suffix: string) => {
+    const product = aProduct({ categoryId: BUCKETS, isDrop: true });
+    const variant = aVariant(product, suffix, 2199);
+    await catalog.putProduct(product, [variant]);
+    return {
+      product,
+      variant,
+      pointer: { sku: variant.sku, productId: product.productId, categoryId: BUCKETS },
+    };
+  };
+
+  it('sets the count checkout will rotate over', async () => {
+    const { variant, pointer } = await aBucketVariant('BUCKETS');
+
+    const before = await catalog.loadVariants([pointer]);
+    expect(before.get(variant.sku)?.stockBuckets).toBe(1);
+
+    await catalog.setStockBuckets(variant.sku, DROP_STOCK_BUCKETS);
+
+    const after = await catalog.loadVariants([pointer]);
+    expect(after.get(variant.sku)?.stockBuckets).toBe(DROP_STOCK_BUCKETS);
+  });
+
+  it('refuses a sku that is not in the catalog', async () => {
+    await expect(catalog.setStockBuckets(sku('NOT-A-SKU'), 10)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  });
+
+  it('refuses a count below one', async () => {
+    const { variant } = await aBucketVariant('ZERO');
+
+    await expect(catalog.setStockBuckets(variant.sku, 0)).rejects.toThrow('positive integer');
+  });
+});
+
 describe('AP2: list a category by price range, cheapest first', () => {
   const cheap = aProduct({ name: 'Cheap tee', categoryId: RANGE, fromPrice: money(1999) });
   const mid = aProduct({ name: 'Mid tee', categoryId: RANGE, fromPrice: money(4999) });
