@@ -1,0 +1,39 @@
+{
+  "name": "aurora-ha-failover",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "What a Node.js app sees when Aurora PostgreSQL fails over, with and without RDS Proxy",
+  "packageManager": "pnpm@10.7.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "web": "tsx src/web/server.ts",
+    "test": "vitest run test",
+    "scenario": "tsx scripts/scenario.ts",
+    "summarize": "tsx scripts/summarize.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-rds": "^3.1161.0",
+    "@aws-sdk/client-secrets-manager": "^3.1161.0",
+    "fastify": "^5.12.7",
+    "pg": "^8.23.1",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^5.0.5"
+  }
+}

@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aurora HA Failover</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f7f7f5;
+        --panel: #ffffff;
+        --text: #1d1d1b;
+        --muted: #6b6b66;
+        --line: #e3e3de;
+        --accent: #232f3e;
+        --accent-text: #ffffff;
+        --error: #c2341b;
+        --error-bg: #fbe9e5;
+        --i1: #2563eb;
+        --i2: #059669;
+        --i3: #d97706;
+        --i-other: #7c3aed;
+        --ok: #16a34a;
+        --timeout: #9ca3af;
+        --skipped: #4b5563;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #121212;
+          --panel: #1c1c1c;
+          --text: #ececea;
+          --muted: #9a9a94;
+          --line: #2e2e2c;
+          --accent: #ececea;
+          --accent-text: #121212;
+          --error: #ff7a5c;
+          --error-bg: #3a1a12;
+          --i1: #60a5fa;
+          --i2: #34d399;
+          --i3: #fbbf24;
+          --i-other: #a78bfa;
+          --ok: #22c55e;
+          --timeout: #6b7280;
+          --skipped: #d1d5db;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          15px/1.45 system-ui,
+          -apple-system,
+          'Segoe UI',
+          sans-serif;
+      }
+      main {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 32px 16px 64px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 24px;
+      }
+      .lead {
+        margin: 4px 0 24px;
+        color: var(--muted);
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+      button {
+        font: inherit;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+        border-radius: 6px;
+        padding: 7px 14px;
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--accent);
+        color: var(--accent-text);
+        border-color: var(--accent);
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .segmented {
+        display: inline-flex;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .segmented button {
+        border: 0;
+        border-radius: 0;
+      }
+      .segmented button[aria-pressed='true'] {
+        background: var(--accent);
+        color: var(--accent-text);
+      }
+      label.auto {
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+        color: var(--muted);
+        margin-left: auto;
+      }
+      h2 {
+        font-size: 16px;
+        margin: 32px 0 12px;
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        color: var(--muted);
+        font-size: 13px;
+        margin-bottom: 12px;
+      }
+      .legend i {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        margin-right: 5px;
+        vertical-align: -1px;
+      }
+      .lanes {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+      }
+      .lane {
+        display: grid;
+        grid-template-columns: 64px 1fr;
+        gap: 4px 12px;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .lane:last-child {
+        margin-bottom: 0;
+      }
+      .lane-name {
+        font-weight: 600;
+      }
+      .lane canvas {
+        width: 100%;
+        height: 44px;
+        display: block;
+        border-radius: 4px;
+        background: var(--bg);
+      }
+      .lane .sub {
+        grid-column: 2;
+      }
+      .axis {
+        display: flex;
+        justify-content: space-between;
+        margin-left: 76px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .table-wrap {
+        overflow-x: auto;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+        white-space: nowrap;
+      }
+      th {
+        color: var(--muted);
+        font-weight: 500;
+      }
+      tbody tr:last-child td {
+        border-bottom: 0;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .chip {
+        display: inline-block;
+        padding: 1px 8px;
+        border-radius: 999px;
+        border: 1px solid currentColor;
+        font-variant-numeric: tabular-nums;
+      }
+      .chip.error {
+        color: var(--error);
+        background: var(--error-bg);
+      }
+      .num {
+        font-variant-numeric: tabular-nums;
+      }
+      .empty {
+        color: var(--muted);
+        text-align: center;
+        padding: 32px;
+      }
+      .note {
+        color: var(--muted);
+        font-size: 13px;
+        margin-top: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Aurora HA Failover</h1>
+      <p class="lead">Which app task, writer and reader answered each request, and in which AZ.</p>
+
+      <h2>Prober heartbeat, last 5 minutes</h2>
+      <div class="legend">
+        <span><i style="background: var(--ok)"></i>ok</span>
+        <span><i style="background: var(--error)"></i>error</span>
+        <span><i style="background: var(--timeout)"></i>timeout</span>
+        <span><i style="background: var(--skipped)"></i>skipped</span>
+        <span>One INSERT every 100 ms per mode, no retries. Labels mark a new writer.</span>
+      </div>
+      <div class="lanes" id="lanes"></div>
+      <div class="axis"><span>5 min ago</span><span id="run"></span><span>now</span></div>
+
+      <h2>Requests</h2>
+      <div class="controls">
+        <button id="request" class="primary">Request</button>
+        <button id="fresh">Request with fresh connection</button>
+        <div class="segmented" role="group" aria-label="Connect through">
+          <button data-via="direct" aria-pressed="true">Direct</button>
+          <button
+            data-via="proxy"
+            aria-pressed="false"
+            disabled
+            title="RDS Proxy is not configured"
+          >
+            RDS Proxy
+          </button>
+        </div>
+        <label class="auto"><input type="checkbox" id="auto" /> Repeat every second</label>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>App task</th>
+              <th>Writer endpoint</th>
+              <th>Reader endpoint</th>
+              <th>Via</th>
+            </tr>
+          </thead>
+          <tbody id="rows">
+            <tr>
+              <td colspan="5" class="empty">No requests yet.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">
+        A warm pool keeps its reader connection, so plain requests keep showing the same reader. A
+        fresh connection resolves the reader endpoint again. Its DNS answer lives 5 seconds, so the
+        reader can only change between requests spaced further apart than that.
+      </p>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
