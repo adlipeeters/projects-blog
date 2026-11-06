@@ -1,0 +1,9 @@
+[project]
+name = "erag-pre-token"
+version = "0.1.0"
+description = "Cognito pre token generation trigger. Deployed as a single file with no dependencies."
+requires-python = ">=3.13,<3.14"
+dependencies = []
+
+[tool.uv]
+package = false

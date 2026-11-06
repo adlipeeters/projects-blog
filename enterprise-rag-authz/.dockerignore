@@ -1,0 +1,9 @@
+*
+!build/requirements-*.txt
+!shared/erag
+!api/erag_api
+!functions/ingest/*.py
+!eval/internal/access_matrix.py
+!scripts/personas.py
+!corpus/manifest.json
+**/__pycache__

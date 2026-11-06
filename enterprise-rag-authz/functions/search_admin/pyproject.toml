@@ -1,0 +1,12 @@
+[project]
+name = "erag-search-admin"
+version = "0.1.0"
+description = "Creates the OpenSearch index and runs the smoke test from inside the VPC."
+requires-python = ">=3.13,<3.14"
+dependencies = ["erag"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+erag = { workspace = true }

@@ -1,0 +1,44 @@
+[project]
+name = "enterprise-rag-authz"
+version = "0.1.0"
+description = "Document Q&A for two companies in one OpenSearch index, with authorization inside retrieval."
+requires-python = ">=3.13,<3.14"
+dependencies = ["boto3", "erag"]
+
+[dependency-groups]
+dev = ["fpdf2", "httpx", "moto[dynamodb]", "mypy", "pytest", "ruff"]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["shared", "api", "functions/*"]
+
+[tool.uv.sources]
+erag = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+src = ["shared", "api", "functions/ingest", "functions/pre_token", "functions/search_admin", "scripts", "eval", "eval/internal"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/test/*" = ["S101"]
+"eval/*" = ["S101"]
+
+[tool.mypy]
+strict = true
+files = ["shared", "api", "functions", "scripts", "eval"]
+mypy_path = "shared:api:functions/ingest:functions/pre_token:functions/search_admin:scripts:eval:eval/internal"
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["boto3.*", "botocore.*", "opensearchpy.*", "moto.*", "fpdf.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["shared/test", "api/test", "functions/ingest/test", "functions/pre_token/test", "scripts/test", "eval/internal/test"]
+pythonpath = ["scripts", "eval", "eval/internal", "api", "functions/ingest", "functions/pre_token"]
+addopts = "-q"

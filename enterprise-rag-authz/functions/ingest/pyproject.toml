@@ -1,0 +1,12 @@
+[project]
+name = "erag-ingest"
+version = "0.1.0"
+description = "Parses, chunks, embeds and indexes uploaded documents."
+requires-python = ">=3.13,<3.14"
+dependencies = ["erag", "pypdf"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+erag = { workspace = true }

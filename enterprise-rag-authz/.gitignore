@@ -1,0 +1,37 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+
+# Web
+node_modules/
+dist/
+build/
+web/public/config.json
+*.log
+
+# Terraform
+.terraform/
+.terraform-check/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+
+# The build spec stays private until the article is published.
+docs/SPEC.md
+
+# Raw test output. Summaries go into the spec.
+results/
+
+# Generated demo account passwords.
+.env
+.env.*
+!.env.example
+
+.DS_Store

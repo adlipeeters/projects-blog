@@ -1,0 +1,12 @@
+[project]
+name = "erag-api"
+version = "0.1.0"
+description = "FastAPI app: admin document routes, and the question path from M3."
+requires-python = ">=3.13,<3.14"
+dependencies = ["erag", "fastapi", "pyjwt[crypto]", "uvicorn"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+erag = { workspace = true }
